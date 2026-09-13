@@ -1,0 +1,63 @@
+name: goal_loop
+description: >-
+  Move the current git worktree toward a goal: Codex proposes, Claude Code implements,
+  and Codex reviews one commit per iteration, using shared local decision history,
+  until a number of hours (decimals allowed, e.g. 1.5) has elapsed. Run from
+  the root of a dedicated linked worktree (see README) with
+  CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 exported. The deadline is soft: it is
+  checked before each iteration, and an iteration that already started runs to
+  completion. While a remaining Claude (Fable weekly, 5-hour) or Codex weekly
+  allowance is below its floor, the loop pauses and rechecks every
+  usage_poll_seconds; the deadline keeps running meanwhile.
+inputs:
+  goal: What the codebase should move toward. Used only inside agent prompts.
+  hours: Hours to keep iterating, up to 720, decimals allowed (1.5 is ninety minutes). Trusted operator input, interpolated into shell.
+  min_claude_fable_remaining: {description: "Pause while the remaining Claude Fable weekly allowance is below this percent (1-100); exactly this much remaining still runs. Trusted operator input, interpolated into shell.", default: "50"}
+  min_claude_5h_remaining: {description: "Pause while the remaining Claude 5-hour allowance is below this percent (1-100); exactly this much remaining still runs. Trusted operator input, interpolated into shell.", default: "50"}
+  min_codex_remaining: {description: "Pause while the remaining Codex weekly allowance is below this percent (1-100); exactly this much remaining still runs. Trusted operator input, interpolated into shell.", default: "30"}
+  usage_poll_seconds: {description: "Seconds to wait before rechecking usage while paused (1-3600). Trusted operator input, interpolated into shell.", default: "300"}
+tasks:
+  - setup:
+      description: Require CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1, guard the dedicated worktree, create .atelier/implementations, print the deadline as epoch seconds
+      task: |
+        set -euo pipefail
+        fail() { echo "goal_loop: $*" >&2; exit 1; }
+        [ "${CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:-}" = "1" ] \
+          || fail "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS must be exactly 1 (got '${CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:-unset}'); run: CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 atelier run goal_loop ... - otherwise claude-code backgrounds its tests and ends its turn before they finish (https://code.claude.com/docs/en/env-vars)"
+        hours='{{inputs.hours}}'
+        [[ $hours =~ ^(0|[1-9][0-9]{0,2})(\.([0-9]{1,4}))?$ ]] \
+          || fail "hours must be a number up to 720 with at most 4 decimals (e.g. 4 or 1.5), got '$hours'"
+        frac=$(printf '%-4s' "${BASH_REMATCH[3]}" | tr ' ' 0)
+        seconds=$(( 10#${BASH_REMATCH[1]} * 3600 + 10#$frac * 3600 / 10000 ))
+        [ "$seconds" -ge 1 ] && [ "$seconds" -le $(( 720 * 3600 )) ] \
+          || fail "hours must be more than 0 and at most 720, got '$hours'"
+        git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "not inside a git worktree"
+        [ "$(git rev-parse --show-toplevel)" = "$(pwd -P)" ] || fail "run from the worktree root"
+        common=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
+        [ "$(git rev-parse --absolute-git-dir)" != "$common" ] \
+          || fail "this is a main checkout or a submodule; use a dedicated linked worktree (git worktree add ../<dir> -b <branch>)"
+        git symbolic-ref -q HEAD >/dev/null || fail "detached HEAD; check out a dedicated branch"
+        if git ls-files -s | grep '^160000 ' >/dev/null; then fail "submodules are not supported"; fi
+        [ -z "$(git ls-files .atelier)" ] || fail "tracked files under .atelier/ would be lost on discard; untrack them first"
+        dirty=$(git status --porcelain | grep -v '^?? \.atelier/' || true)
+        [ -z "$dirty" ] || fail "worktree is not clean (only untracked .atelier/ is allowed):"$'\n'"$dirty"
+        mkdir -p .atelier/implementations
+        printf '%s' "$(( $(date +%s) + seconds ))"
+      tool: tool:bash
+      depends_on: []
+  - iterate:
+      description: One judged commit or one usage pause per pass; stops when goal_iteration reports ATELIER_DEADLINE
+      task: goal_iteration
+      tool: tool:conduit
+      inputs:
+        goal: "{{inputs.goal}}"
+        deadline: "{{setup.output}}"
+        min_claude_fable_remaining: "{{inputs.min_claude_fable_remaining}}"
+        min_claude_5h_remaining: "{{inputs.min_claude_5h_remaining}}"
+        min_codex_remaining: "{{inputs.min_codex_remaining}}"
+        usage_poll_seconds: "{{inputs.usage_poll_seconds}}"
+      depends_on: [setup]
+      repeat: 500
+      until: output.match(ATELIER_DEADLINE)
+      on_exhaust: fail
+      timeout: 7200

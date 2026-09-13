@@ -1,0 +1,4 @@
+name: automatic_goal
+conduits:
+  - goal_loop
+  - goal_iteration

@@ -1,0 +1,10 @@
+.atelier/flows/
+.atelier/implementations/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/
+.env
+.env.*
+.DS_Store
+.atelier/conduits/goal_loop/goals/
