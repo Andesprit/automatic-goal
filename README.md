@@ -1,125 +1,163 @@
 # automatic_goal
 
-Two Flow Atelier conduits that move a codebase toward a goal one judged commit at a time
-until a fixed number of hours (decimals allowed) has passed.
+Move a codebase toward a demonstrated user outcome within a time and usage budget.
+Codex observes, prioritizes, supervises and reviews; Claude Code implements and repairs.
 
-- `goal_loop` guards the worktree, computes the deadline and repeats `goal_iteration`.
-- `goal_iteration` is one pass: `codex` proposes one small documented idea, then `claude-code` implements it and commits
-  it, a mechanical check verifies the commit, `codex` judges it, and the commit is kept or the
-  worktree is reset to where the pass started. Each agent is re-prompted with its own previous
-  output when a turn ends without its final marker line (`claude-code` up to three turns on the
-  same idea, `codex` up to two), because a non-interactive harness turn ends the agent session:
-  anything the agent left running in the background is killed, and "I will wait for the
-  notification" never happens.
-- Before the agents run, `goal_iteration` reads the remaining Claude (Fable weekly, 5-hour) and
-  Codex weekly allowances. A meter below its floor, or a meter that cannot be read, makes the
-  pass wait instead, and the loop rechecks on its next pass. The wall deadline keeps running
-  while paused.
+**Observe → compare opportunities → choose an outcome → build → review and repair → demonstrate.**
 
-Every attempt leaves a numbered Markdown document in the main checkout's
-`.atelier/implementations/`. A worktree's folder is a symlink to that shared directory.
-Codex reads its generated `index.md` and relevant detailed records before proposing anything.
-The index covers kept, discarded, and incomplete/unreviewed attempts. Kept experiments must
-still be checked against the current branch: their commits may not have been merged.
+An outcome persists across milestones and multiple focused commits. Acceptance of a milestone
+means it contributes useful, reliable behavior; only the final user-path demonstration can
+establish that the complete outcome was achieved. Finishing early is valid.
 
-On first attachment, existing worktree records are copied into `imported/<worktree>-<id>/`,
-with originals retained as `.atelier/implementations-local-backup/`. Existing main-checkout
-archives are indexed recursively. Numbered new documents are reserved with exclusive file
-creation so worktrees cannot overwrite each other's idea IDs. Records are written directly
-to shared storage; worktree removal does not remove them. Git's local shared `info/exclude`
-ignores `/.atelier/`; no ignore change or journal is committed or pushed.
+## Setup and run
 
-To attach/import an existing worktree without starting agents, from its root run:
-```sh
-python3 /path/to/automatic_goal/.atelier/conduits/goal_iteration/scripts/memory.py attach
-```
-A normal main checkout with a `.git` directory must remain available. This is local memory:
-it is not replicated to another machine by git. Back it up separately if needed. Agent flow
-logs remain in their originating worktree; this shared store contains the decision documents.
-
-## Setup
-
-Run only inside a dedicated linked git worktree on its own branch. The main checkout is refused.
+Requirements: Git, Bash, Python 3.11+ as `python3`, Atelier, and the `codex` and `claude-code`
+harnesses with their existing logins. Python helpers use the standard library; reports/tests
+also need PyYAML. Use a clean, dedicated linked worktree and a normal main checkout with a
+`.git` directory. Main checkouts, detached HEAD, submodules and tracked `.atelier/` files are
+refused. Never run overlapping flows in one worktree.
 
 ```sh
-cd /path/to/your/repo
-git worktree add ../myrepo-goal -b goal/cache-cleanup
-cd ../myrepo-goal
-atelier add Andesprit/automatic-goal --project   # installs goal_loop and goal_iteration into ./.atelier
-atelier harness list                            # claude-code and codex must be installed and logged in
+cd /path/to/project
+git worktree add ../project-goal -b goal/first-use
+cd ../project-goal
+atelier add Andesprit/automatic-goal --project
+atelier check goal_loop
+atelier check goal_iteration
+CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 atelier run goal_loop \
+  --input hours=4 \
+  --input goal="A new developer can run a useful workflow and recover from a failure unaided"
 ```
 
-`python3` (Python 3.11 or newer, standard library only) must be on PATH for the usage check.
+Quote the goal as a single argument. It is only interpolated into agent prompts, never shell.
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` is required: agent commands and checks must complete
+in the foreground before the harness closes the session. Nothing is pushed or deployed.
 
-`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` must be exported for the `atelier` process. It is an
-official Claude Code setting (<https://code.claude.com/docs/en/env-vars>) that disables
-background shells, automatic backgrounding of long commands and subagents for that process
-only; nothing in your global Claude settings is touched. Without it `claude-code` can start the
-project's tests in the background and end its turn to "wait for the notification", and the
-harness closes the session at the end of the turn, so the tests are killed and no commit is
-made. `setup` and `base` refuse to run any agent unless the variable is exactly `1`.
+| Input | Default | Meaning |
+|---|---|---|
+| `goal` | required | User outcome sought |
+| `hours` | required | Wall-clock hours, decimals allowed, positive and at most 720 |
+| `finish_reserve_percent` | 20 | Last 5–50% of time reserved for integration, repairs and demonstration |
+| `max_revisions` | 2 | 0–5 review repair rounds per milestone; also bounds integration repair milestones |
+| `usage_reserve_percent` | 5 | 0–25 extra percentage points above each usage floor required to start features |
+| `min_claude_fable_remaining` | 50 | Claude model-specific Fable weekly remaining floor |
+| `min_claude_5h_remaining` | 50 | Claude five-hour remaining floor |
+| `min_codex_remaining` | 30 | Codex weekly remaining floor |
+| `usage_poll_seconds` | 300 | Seconds between usage checks while paused, 1–3600 |
 
-## Run
+Choose the finishing reserve for the project's risk and run length. The supervisor can finish
+sooner but cannot silently lower your reserve or usage floors. Planning time counts against
+the same deadline. A milestone estimate includes implementation and review and must fit before
+the finishing reserve. A repair must leave a final handoff allowance (5% of the run, capped at
+five minutes). These estimates are planning constraints, not guarantees of agent speed.
+
+Usage is checked before every stage. New feature work requires the configured extra headroom;
+reviews, repairs and demonstrations may use that buffer, while still respecting the original
+floors. Unknown telemetry pauses. The wall clock continues during pauses. At the deadline the
+runner writes an honest partial handoff without launching another agent. Already-started agent
+turns have a **soft deadline**: they may complete their bounded turn before the next check.
+Codex stages have an 1800-second cap, implementation 3600; a transport failure has one retry,
+and a stage pass has a 7200-second outer cap. Finishing reserves do not turn these into hard
+process deadlines. At most 500 passes, including pauses, run before the loop fails safely.
+
+For unattended use, launch through a persistent job mechanism and record the worktree, branch,
+flow ID and output log. Installation does not start a run. The conduits do not schedule themselves.
+
+## How a run makes decisions
+
+1. **Observe and compare.** Codex inspects the actual user experience, records reproducible
+   baseline steps, failures or measurements, states assumptions, and defines success and
+   preserved behavior. It normally compares three to five opportunities (at least two credible
+   alternatives), by user benefit, evidence, effort and uncertainty. It selects a primary and
+   fallback and explains why the primary deserves the time. Competitor research resolves a
+   named uncertainty when useful; it is not a mandatory ritual or support for a preselected idea.
+2. **Maintain the outcome.** The brief, priority and milestones persist across stage sessions.
+   Codex consults shared accepted, abandoned and unfinished history, checking which changes
+   actually exist on the branch. A changed brief requires an explicit evidence-backed replan;
+   the earlier brief remains in the event log. The opportunity list is not regenerated on every
+   pass. At checkpoints Codex chooses to build, simplify, switch, finish, or report a blocker.
+3. **Build a coherent milestone.** Claude implements across as many files and focused commits
+   as the milestone needs. The scope is the smallest independently useful experience that
+   advances the outcome, with specific acceptance checks. Small fixes are appropriate when
+   they unblock or complete that experience. Multiple commits must extend the recorded base
+   without merges or rewritten history. Journal files must never enter Git history.
+4. **Review value and correctness separately.** Codex inspects the complete milestone diff and
+   independently checks its user benefit and reliability. Checks match risk and scope; broader
+   validation happens at integration points. Commands, results and elapsed time are recorded.
+   Assertion counts and commit counts are not success metrics.
+5. **Repair worthwhile work.** ACCEPT retains the milestone; REVISE sends concrete findings
+   and completion criteria back to Claude on the same milestone; ABANDON records weak value,
+   a disproven hypothesis or unjustified repair cost. Repair has both a count and time budget.
+   Exhaustion becomes DEFERRED, separately from a judgment that the idea was bad. Before rolling
+   back an abandoned/deferred implementation, its commits are preserved under
+   `refs/automatic-goal/<run-id>/<milestone-id>`. Only that milestone is reset; earlier accepted
+   work stays. Dirty or unexpected Git state is preserved for inspection, never cleaned blindly.
+6. **Demonstrate the whole experience.** Codex revisits the original baseline on the accepted
+   branch, runs integrated checks, records before/after evidence, and reports limitations.
+   UI work calls for screenshots or recordings; agent workflows call for reproducible commands.
+   Narrow integration repairs can use the finishing reserve, with their own bounded count.
+   ACHIEVED requires evidence for every success criterion. PARTIAL and BLOCKED state what remains
+   unproven. Neither a passing test suite nor exhausted time implies achievement or adoption.
+
+## Durable state and recovery
+
+`goal_loop` performs setup, creates a run checkpoint and repeats `goal_iteration`. Each iteration
+executes **one stage or one usage pause**, not necessarily one idea or commit. Stage selection and
+Git guards are handled by `goal_iteration/scripts/run.py`; the agents supply JSON decisions.
+The exact contract and examples live in
+[stage-results.md](.atelier/conduits/goal_iteration/stage-results.md).
+
+The main checkout holds shared, local-only records:
+
+```text
+.atelier/implementations/
+  index.md                   # numbered milestone history and links to run handoffs
+  0001.md                    # hypothesis, contribution, implementation and reviews
+  runs/<run-id>/
+    state.json               # canonical brief, milestones, decisions and timestamps
+    request.json             # current stage ID, time remaining and recovery instructions
+    result.json              # agent-written result; must match this request ID and Git state
+    usage.json               # safe telemetry summary, never credentials
+    handoff.md               # regenerated at every checkpoint, including incomplete runs
+    evidence/                # screenshots, recordings or other demonstration artifacts
+```
+
+The worktree's `.atelier/implementations` links to the shared history, and `.atelier/goal`
+links to its current run. A second unfinished run in that worktree is refused. Run IDs are
+stored in the parent flow's outputs, so a report for an older run does not accidentally show
+the newest run's brief. State writes use atomic replacement. Records and abandoned commit refs
+survive worktree deletion but are local: Git pushes do not transfer the journals or these refs.
+Back them up separately. Raw flow logs remain under their originating worktree's `.atelier/flows`.
+
+Final chat formatting is not a control protocol. A valid stage JSON result is accepted regardless
+of the final message. Missing, stale or malformed JSON gets **two bounded recovery attempts**
+with the same request ID and actual Git state, so a committed implementation is not repeated.
+Exhaustion is OPERATIONAL_FAILURE, not ABANDON. A genuine implementation blocker becomes BLOCKED
+and preserves unfinished code. Unexpected branch, HEAD or tracked-file changes also preserve work.
+The human-readable handoff exists even when transport failure prevents a final agent response.
+
+Inspect before resuming an interrupted flow:
 
 ```sh
-CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 atelier run goal_loop --input hours=4 --input goal="Reduce cold start time of the CLI without changing its behaviour"
-CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 atelier run goal_loop --input hours=1.5 --input goal="..." --input min_codex_remaining=30 --input usage_poll_seconds=600
+git status
+atelier status <flow_id>
+atelier outputs <flow_id>
+atelier logs <flow_id>
+cat .atelier/goal/handoff.md
+CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 atelier run --resume <flow_id>
 ```
 
-The worktree must be clean before the run. Untracked run artifacts under `.atelier/` are the
-only exception, and nothing under `.atelier/` may be tracked (a discard runs `git reset --hard`
-and must not lose the documents). Submodules are not supported. One run per worktree at a time.
+Resume retains the original deadline and run checkpoint. Do not start a duplicate loop, reset
+unfinished work, or blindly edit canonical state. A terminal BLOCKED/OPERATIONAL_FAILURE run
+needs inspection and an explicit decision about its preserved changes before a fresh run.
+Flow logs may contain private data; share only relevant redacted excerpts.
 
-## Behaviour
-
-1. `setup` requires `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, validates `hours` (a number up to
-   720 with at most four decimals, e.g. `4` or `1.5`; the deadline is now plus exactly
-   `hours * 3600` seconds, truncated to whole seconds, so `1.5` is 5400 seconds), refuses main
-   checkouts, submodules, dirty trees, detached heads and tracked `.atelier/` files, creates
-   `.atelier/implementations/` and prints the deadline (epoch seconds).
-2. `iterate` runs `goal_iteration` up to 500 times, stopping as soon as a pass prints
-   `ATELIER_DEADLINE`. Paused passes count too. If 500 passes finish before the deadline the
-   flow fails; kept commits stay.
-3. In each pass: `deadline` is checked first, then `usage` reads the remaining allowances once
-   (see below) and prints `USAGE_READY` or `USAGE_PAUSE`; if the reads outlived the deadline it
-   prints `ATELIER_DEADLINE` instead and no agent runs. On `USAGE_PAUSE` the `pause` step sleeps
-   `usage_poll_seconds` (capped at the deadline), prints `USAGE_PAUSED` or `ATELIER_DEADLINE`,
-   and the pass ends there. On `USAGE_READY`, `base` repeats the environment and worktree
-   guards from `setup` (so running `goal_iteration` directly is refused just the same),
-   requires a clean tree and records HEAD; `branch` records the branch name, which must match
-   `[A-Za-z0-9._/-]+`; `next_id` attaches shared history, reserves a document and refreshes
-   the index. `propose` uses Codex to read prior decisions and write the idea, prior-decision
-   links, hypothesis and intended scope. It retries up to twice until `IDEA: READY`.
-   `proposed` refuses code or Git changes and missing proposal sections.
-   Claude Code then implements that specific proposal, preserves its rationale, runs the
-   existing tests in the foreground and makes exactly one commit only if they pass. If a human
-   decision is needed it writes that in the document and makes no commit. The turn must end
-   with `COMMIT: <full hash>` or `COMMIT: none` as its last line. A turn that ends without that
-   line (the agent returned early) is not treated as done: the same prompt is sent again, at
-   most three times per pass, with the previous turn's output attached and the same document
-   id and base commit, and the agent is told to continue the same idea from the real git state:
-   a staged draft is finished and committed once; an existing single commit on top of base is
-   reported without a second commit; anything else stops with `COMMIT: none`. An explicit
-   `COMMIT: none` ends the turns immediately (a human decision or a persistent test failure is
-   not retried). Three turns without the line fail the flow with all work left in place.
-4. `verify` checks mechanically: same branch, exactly one non-empty commit on top of base, no
-   leftover changes, no tracked `.atelier/`, document present. Anything else fails the flow and
-   leaves the worktree untouched for manual review.
-5. `codex` reviews the commit, runs the tests itself in the foreground, appends a `## Verdict`
-   section to the document and ends its message with `VERDICT: KEEP` or `VERDICT: DISCARD` as
-   the final line. A turn that ends without a verdict line is sent once more with its previous
-   output attached; an explicit `DISCARD` is never retried. A `judged` guard then confirms the
-   judge changed nothing in git.
-6. `keep` leaves the commit. `discard` runs `git reset --hard <base>` and `git clean -fd`
-   excluding `.atelier/`, so documents survive. No valid final verdict line fails the flow.
-
-The deadline is soft: it is checked before usage reads, after they finish, and after each pause.
-An implementation that has already started runs through judging to completion. A pass is limited
-to 7200 seconds. Inside it, each claude-code turn is capped at 3600 seconds (at most three turns)
-and each Codex proposal/review turn at 1800 (at most two per stage). Those are per-turn caps that share the pass budget, so
-the turn counts are maxima, not a promise that every retry gets its full cap; a pass that runs out
-of budget fails as a whole. A run can overshoot `hours` by up to one pass, plus runtime cleanup
-overhead.
+`goal_iteration` can also advance a standalone checkpoint with `goal` and `deadline` (epoch
+seconds) inputs; its default `run_id=auto` creates a checkpoint if absent. Subsequent direct
+calls continue that checkpoint with the same deadline. Normally use `goal_loop` to advance
+all stages automatically. Existing legacy numbered history is imported by `memory.py attach`,
+with originals retained in `.atelier/implementations-local-backup/`. KEEP/DISCARD records remain
+readable and are considered during planning.
 
 ### Usage limits
 
@@ -153,39 +191,71 @@ the percentages and the verdict; tokens, bodies and error messages are never pri
   `account/rateLimits/read` through the existing login (no thread or turn is started, the process
   is stopped afterwards). See <https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt>.
 
-### When the flow fails
+## Reports and local dashboard
 
-Nothing is cleaned up on failure. Inspect the worktree and the last document, fix or discard the
-leftovers by hand (`git status`, `git reset --hard`, `git clean -fd -e /.atelier/`), then start a
-new `goal_loop` run. The 500-pass and 720-hour ceilings, the per-turn timeouts and the turn
-counts (`repeat: 3` on `implement`, `repeat: 2` on `propose` and `judge`) are literals in the YAML; edit them
-there if your project needs different ones.
-
-### Trust boundaries
-
-- `hours`, the three usage limits and `usage_poll_seconds` are interpolated into shell before they
-  are validated. Pass only numbers you typed yourself.
-- The branch name is interpolated into later shell steps, so `branch` refuses names with characters
-  outside `[A-Za-z0-9._/-]` before anything else runs.
-- `goal` and the agents' outputs are used only inside agent prompts and regex gates, never in shell.
-- `discard` runs destructive git commands. That is by design and only sensible in the dedicated
-  worktree; do not point the flow at a checkout you care about.
-
-## Tests
-
-The tests run the real shell blocks from the YAML in throwaway git repositories, exercise
-`scripts/usage.py` against synthetic fixtures, a local HTTP server and a fake app-server
-process (no real account is queried), and run the real `goal_iteration` conduit with `atelier`
-against a scripted fake ACP agent (`tests/fake_agent.py`) standing in for both `claude-code`
-and `codex`: early returns, staged drafts finished on a later turn, an existing commit reported
-without a second one, explicit `COMMIT: none`, and judge retries. They need git and PyYAML;
-flow-atelier's own interpreter has PyYAML. The native-loop tests also need the `atelier` CLI on
-PATH and its interpreter's `acp` package (found through the CLI's shebang); they skip otherwise.
+The shared read-only reader covers saved runs across a project's worktrees:
 
 ```sh
-uv run --with pyyaml python -m unittest discover -s tests -v
+python .atelier/conduits/goal_loop/scripts/observe.py report --root /path/to/project
+python .atelier/conduits/goal_loop/scripts/observe.py json --root /path/to/project
+python .atelier/conduits/goal_loop/scripts/observe.py serve --root /path/to/project --port 8765
+```
+
+Open `http://127.0.0.1:8765`. The dashboard leads with the intended outcome, current priority,
+baseline, success criteria, evidence, limitations, milestone decisions and time spent. Activity
+counts and stage history remain available as supporting detail. Accepted milestones are not
+labeled achieved outcomes. Legacy runs retain their original idea counts and documents.
+Stage duration includes recovery and any waits inside that stage; elapsed wall time includes
+all pauses. Usage is the last saved check, and a recorded runner status is not proof of process
+liveness. Missing records are identified rather than guessed.
+
+The server stays local, refreshes every three seconds and stops with Ctrl-C. It does not start
+agents or change runs. Keep exported reports private when their evidence contains private data.
+
+## Upgrade from one-commit iterations
+
+This changes execution semantics and stage names. Finish or inspect existing runs before updating
+an installation; do not resume an old KEEP/DISCARD flow with these new conduits. Install both
+`goal_loop` and `goal_iteration` together, preserving any project-specific customizations. The
+shared legacy decision history is read without rewriting its verdicts. Old dashboards remain
+readable, but accepted-count comparisons across versions do not measure outcome quality.
+
+## Validation
+
+Tests use throwaway Git repositories, local HTTP fixtures, and scripted ACP agents; they do not
+call real models or account endpoints. Native tests exercise the actual Atelier runner through
+multiple commits, review/repair, protocol recovery without markers, and an early final handoff.
+Other checks cover Git guards, time/usage reserves, bounded repair, incomplete handoffs, shared
+history, legacy reports, and telemetry parsing. No test asserts that a model's value judgment
+is correct; real-run evaluation still needs the demonstrated outcome and human judgment.
+
+```sh
+uv run --with pyyaml --with agent-client-protocol python -m unittest discover -s tests -v
 atelier check goal_loop
 atelier check goal_iteration
 atelier plan goal_loop
 atelier plan goal_iteration
 ```
+
+Alternatively use Atelier's Python environment, which already includes PyYAML and ACP.
+Native tests require the Atelier CLI and ACP package. Local HTTP tests require permission to
+bind localhost sockets.
+
+To generate a saved demonstration through the actual runner with scripted agents:
+
+```sh
+python tests/demo.py
+```
+
+It prints the disposable project, worktree, handoff and monitor command. This demonstrates
+orchestration and recovery mechanics without spending model quota; it does not evaluate an
+agent's product judgment. Remove the printed disposable directory when finished inspecting it.
+
+## Input and execution boundaries
+
+Numeric inputs and the generated run ID are interpolated into shell before validation: supply
+only trusted numeric values and generated IDs, never untrusted strings. Goal text and agent
+results are not interpolated into shell. Stage JSON is parsed and validated against Git state.
+Abandon/defer resets are limited to the guarded dedicated worktree, after saving the commit ref.
+No reset, cleanup, push, deployment, usage reset, credit purchase or model switch is performed
+merely to force an interrupted or usage-paused run to continue.
