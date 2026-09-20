@@ -2,6 +2,7 @@
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import importlib.util
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -10,6 +11,11 @@ import subprocess
 import time
 
 import yaml
+
+_spec = importlib.util.spec_from_file_location(
+    "session_report", Path(__file__).resolve().parents[2] / "goal_iteration/scripts/session_report.py")
+session_report = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(session_report)
 
 
 def read(path, warnings):
@@ -108,7 +114,7 @@ def run_snapshot(path, project):
                   "deferred": sum(m["status"] == "DEFERRED" for m in milestones),
                   "repairs": sum(m.get("revisions", 0) for m in milestones),
                   "usage pauses": sum(t["paused"] for t in ticks)}
-    return {"id": str(path), "name": path.name, "project": str(project),
+    run = {"id": str(path), "name": path.name, "project": str(project),
             "goal": inputs.get("goal", "Unknown goal"), "hours": inputs.get("hours"),
             "status": progress.get("status", "unknown"), "started": progress.get("started_at"),
             "finished": progress.get("finished_at"), "current": progress.get("current_tasks", []),
@@ -120,6 +126,44 @@ def run_snapshot(path, project):
             "usage_tick_started": (outcome.get("usage") or {}).get("at") if outcome else
                                   usage_tick["started"] if usage_tick else None,
             "ticks": ticks, "warnings": sorted(set(warnings))}
+    stopped_at = None
+    if progress.get("finished_at"):
+        try:
+            stopped_at = datetime.fromisoformat(progress["finished_at"]).timestamp()
+        except (TypeError, ValueError):
+            pass
+    run["summary"] = session_report.summarize(outcome, now=stopped_at) if outcome else legacy_summary(run)
+    if progress.get("status") in {"failed", "cancelled"} and run["summary"]["status_code"] == "ACTIVE":
+        run["summary"].update(status="Run interrupted", status_code="OPERATIONAL_FAILURE", next="")
+        run["summary"]["remaining"].append("The runner stopped before a final assessment. Saved work needs review.")
+    if run_id and not outcome:
+        run["summary"].update(status="Report unavailable", headline="The session's outcome record could not be read.")
+    return run
+
+
+def legacy_summary(run):
+    summary = session_report.summarize({"status": "LEGACY"})
+    summary.update(status="Outcome not assessed", headline="Legacy session: kept changes are listed below.")
+    try:
+        start = datetime.fromisoformat(run["started"])
+        end = datetime.fromisoformat(run["finished"]) if run["finished"] else datetime.now(timezone.utc)
+        summary["elapsed"] = session_report.duration((end - start).total_seconds())
+    except (TypeError, ValueError):
+        pass
+    for tick in run["ticks"]:
+        if not tick["idea"]:
+            continue
+        introduction = re.split(r"^## ", tick["document"], maxsplit=1, flags=re.M)[0]
+        candidates = [line.strip().lstrip("# ") for line in introduction.splitlines() if line.strip()]
+        title = next((line for line in candidates if line.lower() != "idea"), f"Idea {tick['idea']}")
+        entry = {"title": title, "id": tick["idea"], "status": tick["verdict"],
+                 "detail": {"KEEP":"Reviewed and kept.", "DISCARD":"Discarded after review."}.get(
+                     tick["verdict"], "No applied review decision recorded.")}
+        target = "done" if tick["verdict"] == "KEEP" else "abandoned" if tick["verdict"] == "DISCARD" else "pending"
+        summary[target].append(entry)
+    count = len(summary["done"])
+    summary["headline"] = f"{count} change{'s' if count != 1 else ''} kept. Overall goal completion was not assessed."
+    return summary
 
 
 def snapshot(root):
@@ -129,27 +173,20 @@ def snapshot(root):
     return {"observed_at": datetime.now(timezone.utc).isoformat(), "runs": runs}
 
 
-def report(data):
-    lines = ["# Automatic goal report", "", f"Read at {data['observed_at']}", "",
-             "Statuses are recorded runner states; they do not prove the process is still alive.", ""]
+def report(data, detailed=False):
+    lines = ["# Session report", ""]
     for run in data["runs"]:
-        lines += [f"## {run['name']}", "", str(run["goal"]), "",
-                  f"Recorded status: {run['status']} · {run['started']} → {run['finished'] or 'not finished'}",
-                  json.dumps(run["counts"]), "", "### Last recorded usage", "",
-                  f"Tick started: {run['usage_tick_started']}", "", run["usage"], ""]
-        if run.get("outcome"):
-            state = run["outcome"]
-            lines += [f"Outcome status: {state['status']}",
-                      f"Current priority: {state.get('priority', 'Initial observation')}",
-                      f"Elapsed seconds: {int(run['elapsed_seconds'])}",
-                      f"Stage seconds (including recovery and waits within a stage): {json.dumps(run['stage_seconds'])}",
-                      "", run["handoff"], ""]
-        for tick in run["ticks"]:
+        lines += [f"## {run['goal']}", "", f"Session: {run['started'] or run['name']}", "",
+                  session_report.markdown(run["summary"])]
+        if detailed:
+            lines += ["", "### Technical details", "", f"Runner: {run['status']}",
+                      json.dumps(run["counts"]), run["usage"], run.get("handoff", "")]
+        for tick in run["ticks"] if detailed else []:
             if tick["idea"]:
                 lines += [f"### Idea {tick['idea']} — {tick['verdict']}", "",
                           f"Commit: {tick['commit'] or 'not recorded'}", "",
                           tick["document"] or "Decision document unavailable.", ""]
-        lines += run["warnings"]
+        lines += [f"Record unavailable: {warning}" for warning in run["warnings"]]
     return "\n".join(lines)
 
 
@@ -183,12 +220,13 @@ def main():
     parser.add_argument("mode", choices=["report", "json", "serve"])
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--details", action="store_true", help="Include full review records and technical details in Markdown reports")
     args = parser.parse_args()
     if args.mode == "serve":
         serve(args.root.resolve(), args.port)
     else:
         data = snapshot(args.root.resolve())
-        print(report(data) if args.mode == "report" else json.dumps(data, indent=2))
+        print(report(data, detailed=args.details) if args.mode == "report" else json.dumps(data, indent=2))
 
 
 if __name__ == "__main__":

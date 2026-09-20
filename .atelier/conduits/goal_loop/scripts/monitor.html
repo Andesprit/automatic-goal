@@ -1,50 +1,56 @@
 <!doctype html>
-<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Automatic goal · Atelier</title>
+<html lang="en">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Session report · Automatic goal</title>
 <style>
-:root{color-scheme:dark;font:15px system-ui;background:#161513;color:#eae4d9}body{max-width:1100px;margin:40px auto;padding:0 24px}header{border-bottom:1px solid #454039;padding-bottom:24px}h1,h2{font-family:Georgia,serif;font-weight:400}h1{font-size:40px;margin:12px 0}small,.muted{color:#b0a799}label{display:block;margin:24px 0 8px}select,input{background:#24211d;color:inherit;border:1px solid #625848;padding:12px;border-radius:6px;max-width:100%;width:100%;box-sizing:border-box}#counts{display:flex;flex-wrap:wrap;gap:12px;margin:24px 0}.metric{flex:1;background:#24211d;padding:18px;border:1px solid #403a31;border-radius:8px}.metric strong{display:block;font:28px monospace;color:#edbe79}.panel,details{border:1px solid #403a31;border-radius:8px;padding:18px;margin:12px 0}summary{cursor:pointer;line-height:1.8}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.7 ui-monospace,monospace}#connection{color:#edbe79}button{background:#403426;color:#f1d5ac;padding:10px;border:1px solid #665239;border-radius:6px;cursor:pointer}a{color:#edbe79}
+:root{color-scheme:dark;font:16px/1.55 system-ui,sans-serif;background:#161513;color:#eae4d9;--muted:#b0a799;--line:#403a31;--accent:#edbe79}
+*{box-sizing:border-box}body{max-width:960px;margin:0 auto;padding:36px 28px 64px}header{display:flex;align-items:baseline;justify-content:space-between;gap:24px;margin-bottom:28px}h1{font:600 26px/1.2 Georgia,serif;margin:0}h2{font-size:17px;margin:0 0 12px}h3{font-size:15px;margin:24px 0 8px}p{margin:0 0 12px;max-width:72ch}.muted,small{color:var(--muted)}small{font-size:13px}label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}select{font:inherit;font-size:14px;background:#24211d;color:inherit;border:1px solid #625848;border-radius:6px;padding:10px 12px;width:100%;max-width:100%}:focus-visible{outline:2px solid var(--accent);outline-offset:4px}::selection{background:#695235;color:#fff}body{scrollbar-color:#625848 #161513}
+#overview{padding:30px 0 24px}#goal{font:500 clamp(24px,3.5vw,32px)/1.25 Georgia,serif;margin:14px 0 10px;text-wrap:balance;overflow-wrap:anywhere}.meta{display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:14px;color:var(--muted);font-variant-numeric:tabular-nums}#status{color:var(--accent);font-weight:600}#headline{font-size:18px;margin-bottom:4px}#next{color:var(--muted);font-size:14px}section.work{padding:24px 0;border-top:1px solid var(--line)}ul{list-style:none;margin:0;padding:0}.work li{margin:0 0 16px}.work li:last-child{margin-bottom:0}.item-title{font-weight:600;display:block}.item-detail{color:var(--muted);display:block;max-width:72ch}.empty{color:var(--muted)}#remaining li{margin-bottom:10px}details{border-top:1px solid var(--line);padding:16px 0}summary{cursor:pointer;font-weight:500;padding:4px 0;min-height:32px}summary:hover{color:var(--accent)}details[open]>summary{margin-bottom:16px}.record{border:0;padding:8px 0}.record summary{font-size:14px;color:var(--muted)}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.65 ui-monospace,monospace;color:var(--muted)}.evidence-list li{margin-bottom:10px;overflow-wrap:anywhere}#technical dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 20px;font-size:14px}dt{color:var(--muted)}dd{margin:0;overflow-wrap:anywhere}#warnings{color:var(--accent);font-size:14px}#connection{font-size:12px;text-align:right}#empty-state{margin-top:36px}#filter{margin-bottom:12px}footer{font-size:12px;color:var(--muted);margin-top:28px}
+@media(max-width:600px){body{padding:24px 20px 40px}header{display:block;margin-bottom:20px}#connection{text-align:left;margin-top:8px}#overview{padding-top:24px}#technical dl{grid-template-columns:1fr;gap:2px}dd{margin-bottom:10px}}
 </style>
-<header><small>FLOW ATELIER / AUTOMATIC GOAL</small><h1>From intent to evidence.</h1><p class="muted">Observe · Choose · Build · Review and repair · Demonstrate</p><div id="connection" role="status">Connecting…</div></header>
-<label for="runs">Goal run</label><select id="runs"></select>
-<main id="main"><h2 id="goal"></h2><p id="state"></p>
-<section id="outcome" class="panel" hidden><h2 id="outcome-title">Intended outcome</h2><p id="priority"></p><p id="decision"></p><div id="progress"></div><h3>Baseline and success criteria</h3><pre id="baseline"></pre><h3>Evidence and limitations</h3><pre id="evidence"></pre><h3>Time spent</h3><pre id="time"></pre><h3>Milestones</h3><div id="milestones"></div><details><summary>Full handoff</summary><pre id="handoff"></pre></details></section>
-<details><summary>Implementation activity</summary><div id="counts"></div></details><section class="panel"><h2>Usage remaining</h2><p class="muted">Latest saved check, not a live account balance. Below a configured floor pauses the loop. New features require additional headroom for review and the handoff.</p><pre id="usage"></pre><small id="sample"></small></section><p id="warnings"></p><label for="filter">Show stages</label><select id="filter"><option value="all">All stages and pauses</option><option value="SUPERVISE">Prioritization checkpoints</option><option value="IMPLEMENT">Implementation and repairs</option><option value="REVIEW">Reviews</option><option value="FINALIZE">Demonstrations</option><option value="USAGE_PAUSED">Usage pauses</option><option value="ideas">Legacy ideas</option><option value="KEEP">Legacy kept ideas</option><option value="DISCARD">Legacy discarded ideas</option><option value="UNREVIEWED">Legacy unreviewed ideas</option></select><h2>Stage history</h2><div id="ticks"></div></main>
+<header><h1>Session report</h1><div id="connection" role="status">Loading saved sessions…</div></header>
+<label for="runs">Session</label><select id="runs" aria-label="Session"></select>
+<p id="empty-state" hidden>No saved sessions found for this project.</p>
+<main id="main" hidden>
+<section id="overview"><div class="meta"><span id="status"></span><span id="elapsed"></span><span id="date"></span></div><h2 id="goal"></h2><p id="headline"></p><p id="next" hidden></p></section>
+<section class="work"><h2>Done this session</h2><ul id="done"></ul><p id="done-empty" class="empty" hidden>No reviewed improvements recorded yet.</p></section>
+<section id="open-section" class="work" hidden><h2>Still open</h2><ul id="pending"></ul><ul id="remaining"></ul></section>
+<details id="proof"><summary>Evidence &amp; validation</summary><h3>Before</h3><p id="before"></p><h3>After</h3><p id="after"></p><ul id="evidence" class="evidence-list"></ul><div id="reviews"></div></details>
+<details id="explored-section" hidden><summary id="explored-label">Explored, not kept</summary><ul id="abandoned" class="evidence-list"></ul></details>
+<details id="technical"><summary>Technical details &amp; history</summary><dl id="metadata"></dl><h3>Usage remaining</h3><pre id="usage"></pre><small id="sample"></small><h3>Time by stage</h3><pre id="time"></pre><details class="record"><summary>Full handoff</summary><pre id="handoff"></pre></details><label for="filter">Show stages</label><select id="filter"><option value="all">All stages and pauses</option><option value="SUPERVISE">Prioritization checkpoints</option><option value="IMPLEMENT">Implementation and repairs</option><option value="REVIEW">Reviews</option><option value="FINALIZE">Demonstrations</option><option value="USAGE_PAUSED">Usage pauses</option><option value="ideas">Legacy ideas</option><option value="KEEP">Legacy kept ideas</option><option value="DISCARD">Legacy discarded ideas</option><option value="UNREVIEWED">Legacy unreviewed ideas</option></select><div id="ticks"></div></details>
+<p id="warnings" role="status"></p>
+<footer>Based on saved records. Accepted improvements do not establish that the whole goal is complete.</footer>
+</main>
 <script>
-let data, selected='', rendered='';
+let data,selected='',rendered='',lastRun='';
 const el=id=>document.getElementById(id);
-const duration=seconds=>seconds<60?`${Math.round(seconds)} sec`:`${(seconds/60).toFixed(1)} min`;
+const duration=n=>n<60?`${Math.round(n)} sec`:`${Math.floor(n/3600)?Math.floor(n/3600)+'h ':''}${Math.floor(n/60)%60} min`;
+const date=value=>value?new Date(typeof value==='number'?value*1000:value).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'Date unavailable';
+function list(id,items){el(id).replaceChildren(...items.map(item=>{const li=document.createElement('li');if(typeof item==='string'){li.textContent=item;return li}const title=document.createElement('span'),detail=document.createElement('span');title.className='item-title';detail.className='item-detail';title.textContent=item.title;detail.textContent=item.detail;li.append(title,detail);return li}))}
+function records(id,items){const opened=new Set([...el(id).querySelectorAll('details[open]')].map(d=>d.dataset.id));el(id).replaceChildren(...items.map(item=>{const d=document.createElement('details');d.className='record';d.dataset.id=item.id;d.open=opened.has(item.id);const s=document.createElement('summary'),p=document.createElement('pre');s.textContent=item.title;p.textContent=item.text;d.append(s,p);return d}))}
 function draw(){
  const run=data.runs.find(r=>r.id===selected)||data.runs[0];
- if(!run){el('main').hidden=true;return}el('main').hidden=false;
- selected=run.id;el('runs').value=selected;
+ el('main').hidden=!run;el('empty-state').hidden=!!run;el('runs').disabled=!run;if(!run){rendered='';return}
+ const switched=lastRun!==run.id;lastRun=run.id;selected=run.id;el('runs').value=selected;
  const signature=JSON.stringify([run,el('filter').value]);if(signature===rendered)return;rendered=signature;
- el('goal').textContent=run.goal;
- el('state').textContent=`Recorded status: ${run.status} · Started ${run.started} · ${run.finished?'Finished '+run.finished:'No finish recorded'} · ${run.hours??'?'} hours`;
- const outcome=run.outcome;el('outcome').hidden=!outcome;
- if(outcome){
-  const brief=outcome.brief||{},final=outcome.final||{};
-  el('outcome-title').textContent=brief.outcome||'Observing the starting experience';
-  el('priority').textContent=`Current priority: ${outcome.priority||'Initial observation and comparison'}`;
-  el('decision').textContent=outcome.reason||'';
-  el('progress').textContent=`Outcome: ${outcome.status} · ${outcome.phase} · ${outcome.milestones.filter(m=>m.status==='ACCEPT').length} of ${outcome.milestones.length} milestones accepted`;
-  el('baseline').textContent=[...(brief.baseline||[]),'',...(brief.success_criteria||[]).map(s=>'Success: '+s)].join('\n');
-  el('evidence').textContent=[final.before?'Before: '+final.before:'',final.after?'After: '+final.after:'',...(final.evidence||[]),...(final.limitations||[]).map(s=>'Limitation: '+s),...(final.remaining||[]).map(s=>'Remaining: '+s)].filter(Boolean).join('\n')||'Final demonstration pending. Milestone evidence is available below.';
-  el('time').textContent=`Elapsed: ${duration(run.elapsed_seconds)} · Finishing reserve: ${outcome.reserve_percent}%\n`+Object.entries(run.stage_seconds).map(([stage,seconds])=>`${stage}: ${duration(seconds)}`).join('\n')+'\nStage durations include recovery and waits within a stage.';
-  const opened=new Set([...el('milestones').querySelectorAll('details[open]')].map(d=>d.dataset.id));
-  el('milestones').replaceChildren(...outcome.milestones.map(m=>{const d=document.createElement('details');d.dataset.id=m.id;d.open=opened.has(m.id);const s=document.createElement('summary');s.textContent=`${m.title} · ${m.status} · ${m.revisions} repair${m.revisions===1?'':'s'}`;const p=document.createElement('pre');p.textContent=[m.benefit,...m.acceptance,...(m.reviews||[]).flatMap(r=>[r.verdict+': '+r.reason,'Correctness: '+r.correctness,'Value: '+r.value,...r.evidence,...r.findings]),m.checkpoint_ref?'Preserved: '+m.checkpoint_ref:''].filter(Boolean).join('\n\n');d.append(s,p);return d}));
-  el('handoff').textContent=run.handoff;
- }
- el('counts').replaceChildren(...Object.entries(run.counts).map(([key,value])=>{const box=document.createElement('div');box.className='metric';const number=document.createElement('strong');number.textContent=value;box.append(number,document.createTextNode(key));return box}));
- const sampled=typeof run.usage_tick_started==='number'?new Date(run.usage_tick_started*1000).toLocaleString():run.usage_tick_started||'unknown';
- el('usage').textContent=run.usage;el('sample').textContent=`Usage sampled: ${sampled}. Runner status is not a process health check.`;
+ if(switched){for(const d of document.querySelectorAll('main>details'))d.open=false}
+ const s=run.summary,state=run.outcome;
+ el('status').textContent=s.status;el('elapsed').textContent=s.elapsed;el('date').textContent=date(run.started);
+ el('goal').textContent=run.goal;el('headline').textContent=s.headline;
+ el('next').hidden=!s.next;el('next').textContent=s.next?'Current focus: '+s.next:'';
+ list('done',s.done);el('done-empty').hidden=!!s.done.length;
+ el('open-section').hidden=!s.pending.length&&!s.remaining.length;list('pending',s.pending);list('remaining',s.remaining);
+ el('before').textContent=s.before||'Starting experience not recorded.';el('after').textContent=s.after||'Final demonstration not recorded.';list('evidence',s.evidence);
+ el('explored-section').hidden=!s.abandoned.length;el('explored-label').textContent=`Explored, not kept (${s.abandoned.length})`;list('abandoned',s.abandoned);
+ records('reviews',(state?.milestones||[]).map(m=>({id:m.id,title:m.title,text:(m.reviews||[]).map(r=>`${r.verdict}: ${r.reason}\nCorrectness: ${r.correctness}\nValue: ${r.value}\n${r.evidence.join('\n')}\n${r.findings.join('\n')}`).join('\n\n')||'No review recorded.'})));
+ const meta={'Branch':s.branch||'Not recorded','Runner':run.status,'Outcome':s.status,'Session':run.name,...run.counts};
+ el('metadata').replaceChildren(...Object.entries(meta).flatMap(([key,value])=>{const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=key;dd.textContent=value;return[dt,dd]}));
+ el('usage').textContent=run.usage;el('sample').textContent=`Sampled ${date(run.usage_tick_started)}. A saved status is not a process health check.`;
+ el('time').textContent=Object.entries(run.stage_seconds).map(([stage,seconds])=>`${stage}: ${duration(seconds)}`).join('\n')||'Stage timing not recorded.';el('handoff').textContent=run.handoff||'No outcome handoff recorded for this session.';
+ records('ticks',run.ticks.slice().reverse().filter(t=>{const f=el('filter').value;return f==='all'||t.phase===f||(f==='USAGE_PAUSED'&&t.paused)||(f==='ideas'?!!t.idea:!!t.idea&&t.verdict===f)}).map(t=>({id:t.id,title:`${t.phase||(t.idea?'Idea '+t.idea+' · '+t.verdict:t.paused?'Usage pause':'Setup')} · ${date(t.started)}`,text:Object.entries(t.stages).map(([name,v])=>`${name}: ${v.status}`).join('\n')+'\n\n'+(t.idea?t.document:t.usage)})));
  el('warnings').textContent=run.warnings.join(' · ');
- const open=new Set([...el('ticks').querySelectorAll('details[open]')].map(d=>d.dataset.id));
- el('ticks').replaceChildren(...run.ticks.slice().reverse().filter(t=>{const f=el('filter').value;return f==='all'||t.phase===f||(f==='USAGE_PAUSED'&&t.paused)||(f==='ideas'?!!t.idea:!!t.idea&&t.verdict===f)}).map(t=>{
- const d=document.createElement('details');d.dataset.id=t.id;d.open=open.has(t.id);
- const s=document.createElement('summary');s.textContent=`${t.phase|| (t.idea?'Idea '+t.idea+' · '+t.verdict:t.paused?'Usage pause':'Deadline / setup')} — ${t.status} · ${t.started}`;
- const p=document.createElement('pre');p.textContent=Object.entries(t.stages).map(([name,v])=>`${name}: ${v.status}`).join('\n')+'\n\n'+(t.idea?`Commit: ${t.commit||'not recorded'}\n\n${t.document||'Decision document unavailable.'}`:t.usage);
- d.append(s,p);return d}));
 }
-async function poll(){try{const response=await fetch('/api/snapshot');if(!response.ok)throw Error(response.status);data=await response.json();el('runs').replaceChildren(...data.runs.map(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.name+' · '+r.project.split('/').pop();return o}));draw();el('connection').textContent=`Updated ${new Date(data.observed_at).toLocaleTimeString()} · Refreshes every 3 seconds${data.runs.length?'':' · No saved goal runs found'}`;}catch(e){el('connection').textContent='Disconnected — showing last received data. Retrying…'}finally{setTimeout(poll,3000)}}
+async function poll(){try{const response=await fetch('/api/snapshot');if(!response.ok)throw Error(response.status);data=await response.json();el('runs').replaceChildren(...data.runs.map(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=`${date(r.started)} · ${r.goal}`;return o}));draw();el('connection').textContent=`Updated ${new Date(data.observed_at).toLocaleTimeString()}`;}catch(e){el('connection').textContent='Cannot refresh. Showing the last saved view; retrying…'}finally{setTimeout(poll,3000)}}
 el('runs').onchange=()=>{selected=el('runs').value;draw()};el('filter').onchange=draw;poll();
-</script></html>
+</script>
+</html>

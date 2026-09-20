@@ -13,6 +13,7 @@ import time
 import uuid
 
 import memory
+import session_report
 
 
 TERMINAL = {"ACHIEVED", "PARTIAL", "BLOCKED", "OPERATIONAL_FAILURE"}
@@ -77,7 +78,7 @@ def location():
     return path, state
 
 
-def report(state):
+def detailed_report(state):
     brief = state.get("brief") or {}
     final = state.get("final") or {}
     lines = ["# Outcome handoff", "", f"Status: {state['status']}",
@@ -112,6 +113,12 @@ def report(state):
     for check in final.get("checks", []):
         lines.append(f"- `{check['command']}` → exit {check['exit_code']}: {check['summary']}")
     return "\n".join(lines) + "\n"
+
+
+def report(state):
+    return ("# Session report\n\n" + session_report.markdown(session_report.summarize(state)) +
+            "\n<details>\n<summary>Full review and validation record</summary>\n\n" +
+            detailed_report(state) + "\n</details>\n")
 
 
 def save(path, state):

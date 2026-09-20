@@ -16,6 +16,11 @@ All text fields below must be nonempty strings. Text lists must be nonempty exce
 Do not use placeholder evidence: name the command, observation or artifact that supports
 the conclusion. Store evidence files in `.atelier/goal/evidence/` and reference their paths.
 
+Write milestone titles as short outcome phrases (about eight words or fewer). The implementation
+`summary` appears directly in **Done this session**: use one plain-language sentence explaining
+what changed for the user, ideally under 25 words. Put filenames, commands, and test counts in
+the evidence and check records. Do not repeat the title or narrate the implementation steps.
+
 ## Common check record
 
 Every implementation, review, and final result has a nonempty `checks` array:

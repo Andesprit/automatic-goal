@@ -11,6 +11,31 @@ spec.loader.exec_module(observe)
 
 
 class ObserveTests(unittest.TestCase):
+    def test_interrupted_runner_does_not_look_active_or_keep_accumulating_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            identifier = 'b' * 32
+            (root / 'progress.json').write_text(json.dumps({'status':'failed','finished_at':'1970-01-01T00:02:40Z'}))
+            (root / 'input.yaml').write_text('goal: test')
+            (root / 'outputs.yaml').write_text('initialize: ' + identifier)
+            record = root / '.atelier/implementations/runs' / identifier
+            record.mkdir(parents=True)
+            (record / 'state.json').write_text(json.dumps({'status':'ACTIVE','started':100,'milestones':[],'events':[]}))
+            run = observe.run_snapshot(root, root)
+            self.assertEqual(run['summary']['status'], 'Run interrupted')
+            self.assertEqual(run['summary']['elapsed'], '1 min')
+            self.assertEqual(run['summary']['next'], '')
+
+    def test_missing_modern_outcome_is_reported_as_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'progress.json').write_text('{}')
+            (root / 'input.yaml').write_text('goal: test')
+            (root / 'outputs.yaml').write_text('initialize: ' + 'c' * 32)
+            run = observe.run_snapshot(root, root)
+            self.assertEqual(run['summary']['status'], 'Report unavailable')
+            self.assertEqual(run['summary']['done'], [])
+
     def test_outcome_is_loaded_by_run_id_not_latest_worktree_pointer(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)
@@ -32,8 +57,10 @@ class ObserveTests(unittest.TestCase):
             self.assertEqual(run['elapsed_seconds'], 60)
             self.assertEqual(run['stage_seconds'], {'REVIEW':20})
             report = observe.report({'observed_at':'now','runs':[run]})
-            self.assertIn('outcome unproven', report)
-            self.assertIn('Current priority: onboarding', report)
+            self.assertIn('Partly complete', report)
+            self.assertIn('1 improvement completed and reviewed', report)
+            self.assertNotIn('Stage seconds', report)
+            self.assertIn('outcome unproven', observe.report({'observed_at':'now','runs':[run]}, detailed=True))
 
     def test_partial_records_do_not_crash(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -56,7 +83,7 @@ class ObserveTests(unittest.TestCase):
                 (tick / 'outputs.yaml').write_text(output)
             run = observe.run_snapshot(root, root)
             self.assertEqual(run['counts'], dict(ticks=2, ideas=1, kept=0, discarded=0, unreviewed=1, pauses=1))
-            self.assertIn('UNREVIEWED', observe.report({'observed_at':'now', 'runs':[run]}))
+            self.assertIn('No applied review decision', observe.report({'observed_at':'now', 'runs':[run]}))
 
     def test_legacy_namespace_precedes_shared_id(self):
         with tempfile.TemporaryDirectory() as tmp:

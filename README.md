@@ -197,14 +197,19 @@ The shared read-only reader covers saved runs across a project's worktrees:
 
 ```sh
 python .atelier/conduits/goal_loop/scripts/observe.py report --root /path/to/project
+python .atelier/conduits/goal_loop/scripts/observe.py report --root /path/to/project --details
 python .atelier/conduits/goal_loop/scripts/observe.py json --root /path/to/project
 python .atelier/conduits/goal_loop/scripts/observe.py serve --root /path/to/project --port 8765
 ```
 
-Open `http://127.0.0.1:8765`. The dashboard leads with the intended outcome, current priority,
-baseline, success criteria, evidence, limitations, milestone decisions and time spent. Activity
-counts and stage history remain available as supporting detail. Accepted milestones are not
-labeled achieved outcomes. Legacy runs retain their original idea counts and documents.
+Open `http://127.0.0.1:8765`. The dashboard opens with **Done this session**: every accepted
+improvement, its plain-language description, the overall result and elapsed time. **Still open**
+shows unfinished work and limitations. Evidence, abandoned attempts, usage and stage history are
+expandable, so the main view answers what the whole session accomplished without reading logs.
+The Markdown export uses the same summary; add `--details` for full review records and technical
+data. Newly written `handoff.md` files also lead with this summary and fold the audit trail below.
+Accepted milestones are not labeled achieved outcomes. Legacy sessions list their kept changes
+without claiming that the overall goal was demonstrated.
 Stage duration includes recovery and any waits inside that stage; elapsed wall time includes
 all pauses. Usage is the last saved check, and a recorded runner status is not proof of process
 liveness. Missing records are identified rather than guessed.
