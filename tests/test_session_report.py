@@ -38,12 +38,40 @@ class SessionReportTests(unittest.TestCase):
         self.assertEqual(summary['status'], 'Partly complete')
         self.assertFalse(summary['demonstrated'])
         self.assertEqual(summary['pending'][0]['title'], 'Failure recovery')
-        self.assertEqual(summary['abandoned'][0]['detail'], 'Duplicated an existing capability')
+        self.assertEqual(summary['abandoned'][0]['detail'], 'Not kept: Duplicated an existing capability')
         text = report.markdown(summary)
         done = text.split('### Done')[1].split('### Still open')[0]
         self.assertNotIn('Failure recovery', done)
         self.assertIn('Windows not checked', text)
         self.assertIn('The overall goal has not been demonstrated', text)
+
+    def test_paragraphs_preserve_what_why_how_and_abandonment_evidence(self):
+        state = self.state()
+        completed = ('The starter picker adds a guided first run. '
+                     'New developers previously had to choose a template without context. '
+                     'It previews each workflow and reuses the existing login to run the selection.')
+        attempted = ('We added a shortcut for choosing the default workflow. '
+                     'The aim was to reduce setup decisions. '
+                     'It wrapped the existing starter command with a fixed template.')
+        reason = ('The walkthrough showed the starter picker already covered this path. '
+                  'Another command added a choice without removing any setup steps.')
+        state['milestones'][0]['implementation']['summary'] = completed
+        state['milestones'][3]['implementation'] = {'summary': attempted}
+        state['milestones'][3]['reviews'] = [{'reason': reason}]
+        summary = report.summarize(state)
+        self.assertEqual(summary['done'][0]['detail'], completed)
+        self.assertEqual(summary['abandoned'][0]['detail'], attempted + ' Not kept: ' + reason)
+        text = report.markdown(summary)
+        self.assertIn('**Starter picker**\n\n' + completed, text)
+        self.assertIn('**Extra command**\n\n' + attempted + ' Not kept: ' + reason, text)
+        self.assertNotIn(attempted, text.split('### Done')[1].split('### Still open')[0])
+
+    def test_abandoned_older_record_retains_available_context(self):
+        state = self.state()
+        state['milestones'][3]['benefit'] = 'Reduce setup decisions'
+        summary = report.summarize(state)
+        self.assertEqual(summary['abandoned'][0]['detail'],
+                         'Reduce setup decisions. Not kept: Duplicated an existing capability')
 
     def test_live_and_interrupted_sessions_remain_honest(self):
         state = self.state()

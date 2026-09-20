@@ -17,9 +17,19 @@ Do not use placeholder evidence: name the command, observation or artifact that 
 the conclusion. Store evidence files in `.atelier/goal/evidence/` and reference their paths.
 
 Write milestone titles as short outcome phrases (about eight words or fewer). The implementation
-`summary` appears directly in **Done this session**: use one plain-language sentence explaining
-what changed for the user, ideally under 25 words. Put filenames, commands, and test counts in
-the evidence and check records. Do not repeat the title or narrate the implementation steps.
+`summary` appears directly in **Done this session**: write one plain-language paragraph
+(typically three to five sentences) explaining **what** changed for the user, **why** it was
+worth doing, and **how** the change works. Describe the concrete approach and any meaningful
+tradeoff; avoid a chronological work log. Keep commands and test counts in evidence and checks.
+On repairs, summarize the complete milestone, including the original change and the repair,
+so the report describes all the work rather than just the last fix.
+
+For ABANDON, the report combines that implementation paragraph with the reviewer’s `reason`.
+Use `reason` to explain why the approach was dropped, what observation or evidence led to
+that decision, and the resulting limitation or lesson. Do not repeat the implementation
+summary or imply that abandoned work was delivered. Each discarded idea should read as one
+coherent paragraph covering the attempted change, its intended benefit, its approach, and
+why it was not kept. Use recorded facts; never invent detail to reach a sentence count.
 
 ## Common check record
 
@@ -81,7 +91,7 @@ cannot finish before the finishing reserve. FINISH can end a successful run earl
 ## IMPLEMENT
 
 ```json
-{"request_id":"copy request.id","status":"READY","head":"full current commit hash","summary":"Changes and why","checks":[{"command":"test command","exit_code":0,"summary":"results","duration_seconds":1}],"evidence":["Before/after observation or artifact path"]}
+{"request_id":"copy request.id","status":"READY","head":"full current commit hash","summary":"One paragraph: what changed, why it matters, and how it works","checks":[{"command":"test command","exit_code":0,"summary":"results","duration_seconds":1}],"evidence":["Before/after observation or artifact path"]}
 ```
 
 Multiple focused commits may extend the active milestone's base. Leave the tree clean and

@@ -203,7 +203,9 @@ python .atelier/conduits/goal_loop/scripts/observe.py serve --root /path/to/proj
 ```
 
 Open `http://127.0.0.1:8765`. The dashboard opens with **Done this session**: every accepted
-improvement, its plain-language description, the overall result and elapsed time. **Still open**
+improvement, the overall result and elapsed time. Each improvement has a plain-language
+paragraph explaining what changed, why it matters, and how it works. Discarded ideas retain
+the attempted approach and intended benefit, followed by the evidence and reason for dropping them. **Still open**
 shows unfinished work and limitations. Evidence, abandoned attempts, usage and stage history are
 expandable, so the main view answers what the whole session accomplished without reading logs.
 The Markdown export uses the same summary; add `--details` for full review records and technical

@@ -39,7 +39,11 @@ def summarize(state, now=None):
             entry["evidence"] = unique(latest.get("evidence", []))
             done.append(entry)
         elif status == "ABANDON":
-            entry["detail"] = latest.get("reason") or "Approach abandoned."
+            attempt = entry["detail"].strip()
+            if attempt and not attempt.endswith((".", "!", "?")):
+                attempt += "."
+            reason = latest.get("reason") or "No abandonment reason recorded."
+            entry["detail"] = " ".join(part for part in (attempt, f"Not kept: {reason}") if part)
             abandoned.append(entry)
         else:
             entry["detail"] = ("Deferred. " if status == "DEFERRED" else "Not yet accepted. ") + (
@@ -71,7 +75,7 @@ def summarize(state, now=None):
 def markdown(summary):
     lines = [f"**{summary['status']} · {summary['elapsed']}**", "", summary["headline"], "", "### Done", ""]
     for item in summary["done"]:
-        lines.append(f"- **{item['title']}** — {item['detail']}")
+        lines += [f"**{item['title']}**", "", item["detail"], ""]
     if not summary["done"]:
         lines.append("No reviewed improvements recorded.")
     if summary["pending"] or summary["remaining"]:
@@ -87,8 +91,9 @@ def markdown(summary):
     if summary["evidence"]:
         lines += ["", "### Evidence", "", *[f"- {item}" for item in summary["evidence"]]]
     if summary["abandoned"]:
-        lines += ["", "### Explored, not kept", "",
-                  *[f"- **{item['title']}** — {item['detail']}" for item in summary["abandoned"]]]
+        lines += ["", "### Explored, not kept", ""]
+        for item in summary["abandoned"]:
+            lines += [f"**{item['title']}**", "", item["detail"], ""]
     if summary["branch"]:
         lines += ["", f"Branch: `{summary['branch']}`"]
     return "\n".join(lines) + "\n"
