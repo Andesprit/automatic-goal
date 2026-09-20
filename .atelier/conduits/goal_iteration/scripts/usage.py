@@ -295,14 +295,19 @@ def main(argv):
         zip(METERS, (int(arg) for arg in argv[1:]), strict=True)
     )  # ranges are validated by the conduit
     ready = True
+    remaining = []
     for meter, (used, why) in read_usage().items():
         floor = floors[meter]  # floor on what is left; exactly the floor still runs
         left = None if used is None else 100 - used
+        remaining.append(left)
         allowed = left is not None and left >= floor
         shown = f"unavailable ({why})" if left is None else f"{left:g}% remaining"
         line = f"{meter}: {shown} (pause below {floor}% remaining)"
         print(line + ("" if allowed else " -> pause"))
         ready = ready and allowed
+    if destination := os.environ.get("GOAL_USAGE_FILE"):
+        # Optional structured result for the outcome runner; never includes credentials or raw responses.
+        Path(destination).write_text(json.dumps({"remaining": remaining, "at": now()}) + "\n")
     print("USAGE_READY" if ready else "USAGE_PAUSE")
     return 0
 

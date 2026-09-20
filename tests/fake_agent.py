@@ -57,8 +57,12 @@ class Agent:
 
     async def prompt(self, prompt, session_id, **kwargs):
         global NAME
-        if NAME == "codex" and "You are the idea author" in "".join(getattr(block, "text", "") for block in prompt):
-            NAME = "planner"
+        prompt_text = "".join(getattr(block, "text", "") for block in prompt)
+        if NAME == "codex":
+            if "You are the outcome supervisor" in prompt_text:
+                NAME = "supervisor"
+            elif "You are the outcome demonstrator" in prompt_text:
+                NAME = "finalizer"
         counter = STATE / f"{NAME}.calls"
         n = int(counter.read_text()) if counter.exists() else 0
         counter.write_text(str(n + 1))

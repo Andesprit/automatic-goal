@@ -1,16 +1,15 @@
 name: goal_loop
 description: >-
-  Move the current git worktree toward a goal: Codex proposes, Claude Code implements,
-  and Codex reviews one commit per iteration, using shared local decision history,
-  until a number of hours (decimals allowed, e.g. 1.5) has elapsed. Run from
-  the root of a dedicated linked worktree (see README) with
-  CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 exported. The deadline is soft: it is
-  checked before each iteration, and an iteration that already started runs to
-  completion. While a remaining Claude (Fable weekly, 5-hour) or Codex weekly
-  allowance is below its floor, the loop pauses and rechecks every
-  usage_poll_seconds; the deadline keeps running meanwhile.
+  Observe, compare opportunities, choose an outcome, build milestones, review and repair,
+  then demonstrate the result. Codex supervises and reviews; Claude Code implements.
+  Durable checkpoints preserve priorities and evidence across multiple commits and stages.
+  The finishing reserve defaults to 20 percent. Usage floors remain strict; a separate
+  buffer stops new features sooner. An active agent turn has a soft deadline.
 inputs:
-  goal: What the codebase should move toward. Used only inside agent prompts.
+  goal: The user outcome sought. Used only inside agent prompts, never interpolated into shell.
+  finish_reserve_percent: {description: "Percent of wall time reserved for integration and demonstration (5-50). Trusted numeric input.", default: "20"}
+  max_revisions: {description: "Repair rounds per milestone and integration repair milestones (0-5). Trusted numeric input.", default: "2"}
+  usage_reserve_percent: {description: "Extra percentage points above each usage floor required to start features (0-25). Trusted numeric input.", default: "5"}
   hours: Hours to keep iterating, up to 720, decimals allowed (1.5 is ninety minutes). Trusted operator input, interpolated into shell.
   min_claude_fable_remaining: {description: "Pause while the remaining Claude Fable weekly allowance is below this percent (1-100); exactly this much remaining still runs. Trusted operator input, interpolated into shell.", default: "50"}
   min_claude_5h_remaining: {description: "Pause while the remaining Claude 5-hour allowance is below this percent (1-100); exactly this much remaining still runs. Trusted operator input, interpolated into shell.", default: "50"}
@@ -45,19 +44,28 @@ tasks:
         printf '%s' "$(( $(date +%s) + seconds ))"
       tool: tool:bash
       depends_on: []
+  - initialize:
+      description: Create a durable run checkpoint; refuse a second unfinished run in this worktree
+      task: >-
+        python3 "{{conduit_dir}}/../goal_iteration/scripts/run.py" init
+        '{{setup.output}}' '{{inputs.finish_reserve_percent}}'
+        '{{inputs.max_revisions}}' '{{inputs.usage_reserve_percent}}'
+      tool: tool:bash
+      depends_on: [setup]
   - iterate:
-      description: One judged commit or one usage pause per pass; stops when goal_iteration reports ATELIER_DEADLINE
+      description: One supervised stage or usage pause per pass; stop on a demonstrated outcome or a recorded incomplete handoff
       task: goal_iteration
       tool: tool:conduit
       inputs:
         goal: "{{inputs.goal}}"
         deadline: "{{setup.output}}"
+        run_id: "{{initialize.output}}"
         min_claude_fable_remaining: "{{inputs.min_claude_fable_remaining}}"
         min_claude_5h_remaining: "{{inputs.min_claude_5h_remaining}}"
         min_codex_remaining: "{{inputs.min_codex_remaining}}"
         usage_poll_seconds: "{{inputs.usage_poll_seconds}}"
-      depends_on: [setup]
+      depends_on: [setup, initialize]
       repeat: 500
-      until: output.match(ATELIER_DEADLINE)
+      until: 'output.match(^GOAL_DONE$)'
       on_exhaust: fail
       timeout: 7200

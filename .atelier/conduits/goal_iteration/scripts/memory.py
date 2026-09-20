@@ -65,14 +65,16 @@ def attach(cwd):
 def index(root):
     rows = ["# Shared decision history", "",
             "Read this index before proposing an idea, then open relevant linked documents.",
-            "KEEP is an accepted experiment, not proof its commit exists on your current branch.",
+            "ACCEPT / legacy KEEP is an accepted milestone, not proof the overall outcome is achieved or its commits are on this branch.",
             "INCOMPLETE / UNREVIEWED includes interrupted proposals, failed implementations and pending reviews.",
             "Do not repeat an idea without understanding its prior outcome and explaining new evidence.", ""]
     for doc in sorted(root.rglob("*.md")):
+        if doc.relative_to(root).parts[0] == "runs":
+            continue  # Run handoffs are linked below; milestones already have numbered records.
         if doc.name in {"index.md", "INDEX.md"}:
             continue
         body = doc.read_text(errors="replace")
-        verdicts = re.findall(r"^VERDICT:\s*(KEEP|DISCARD)\s*$", body, re.M)
+        verdicts = re.findall(r"^VERDICT:\s*(ACCEPT|REVISE|ABANDON|DEFERRED|KEEP|DISCARD)\s*$", body, re.M)
         verdict = verdicts[-1] if verdicts else "INCOMPLETE / UNREVIEWED"
         # Include the idea and the review reason, keeping the full record one link away.
         idea = re.split(r"^## ", body, maxsplit=1, flags=re.M)[0]
@@ -81,6 +83,10 @@ def index(root):
             return " ".join(value.split()).replace("|", "\\|")[:600]
         rows.extend([f"- [{doc.relative_to(root)}]({doc.relative_to(root).as_posix()}) — **{verdict}**",
                      f"  {compact(idea)}", f"  {compact(reason)}"])
+    rows.extend(["", "## Outcome handoffs", ""])
+    for handoff in sorted((root / "runs").glob("*/handoff.md")):
+        relative = handoff.relative_to(root).as_posix()
+        rows.append(f"- [{handoff.parent.name}]({relative})")
     # An interrupted writer must never leave a truncated index.
     fd, name = tempfile.mkstemp(dir=root, prefix=".index-")
     with os.fdopen(fd, "w") as out:
