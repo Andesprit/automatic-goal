@@ -1,13 +1,14 @@
 name: goal_loop
 description: >-
-  Observe, compare opportunities, choose an outcome, build milestones, review and repair,
-  then demonstrate the result. Codex supervises and reviews; Claude Code implements.
-  Durable checkpoints preserve priorities and evidence across multiple commits and stages.
-  The finishing reserve defaults to 20 percent. Usage floors remain strict; a separate
-  buffer stops new features sooner. An active agent turn has a soft deadline.
+  Observe, compare opportunities, build bold milestones, review and repair, and keep going
+  until the time is used, then demonstrate the result. Codex supervises and reviews; Claude
+  Code implements. Durable checkpoints preserve priorities and evidence across multiple commits
+  and stages. The finishing reserve defaults to 10 percent. Usage floors remain strict; below a
+  floor, or inside the buffer before new work, the run waits for a reset instead of ending.
+  An active agent turn has a soft deadline.
 inputs:
   goal: The user outcome sought. Used only inside agent prompts, never interpolated into shell.
-  finish_reserve_percent: {description: "Percent of wall time reserved for integration and demonstration (5-50). Trusted numeric input.", default: "20"}
+  finish_reserve_percent: {description: "Percent of wall time reserved for integration and demonstration (5-50). Trusted numeric input.", default: "10"}
   max_revisions: {description: "Repair rounds per milestone and integration repair milestones (0-5). Trusted numeric input.", default: "2"}
   usage_reserve_percent: {description: "Extra percentage points above each usage floor required to start features (0-25). Trusted numeric input.", default: "5"}
   hours: Hours to keep iterating, up to 720, decimals allowed (1.5 is ninety minutes). Trusted operator input, interpolated into shell.
@@ -53,7 +54,7 @@ tasks:
       tool: tool:bash
       depends_on: [setup]
   - iterate:
-      description: One supervised stage or usage pause per pass; stop on a demonstrated outcome or a recorded incomplete handoff
+      description: One supervised stage or usage pause per pass; stop at the deadline after the final demonstration, or on an operational failure
       task: goal_iteration
       tool: tool:conduit
       inputs:

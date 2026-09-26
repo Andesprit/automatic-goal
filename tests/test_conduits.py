@@ -33,11 +33,12 @@ BRIEF = {
     'primary': 'onboarding', 'fallback': 'diagnostics',
     'selection_reason': 'It removes the first-run blocker', 'research': 'Actual failure reproduced; no external research needed'}
 MILESTONE = {'title': 'First useful workflow', 'opportunity': 'onboarding', 'benefit': 'Unblocks new users',
+             'ambition': 'bold', 'upside': 'New users succeed alone', 'risk': 'The runner may not allow it',
              'acceptance': ['First run succeeds'], 'scope': ['b.txt'], 'checks': ['test -f b.txt'],
              'estimated_seconds': 10}
 SUPERVISE = {'action': 'BUILD', 'brief': BRIEF, 'reason': 'Highest observed benefit',
              'learning': 'Reproduced the initial failure', 'priority': 'First run', 'milestone': MILESTONE}
-REVIEW = {'verdict': 'ACCEPT', 'correctness': 'Checks pass', 'value': 'First run no longer fails',
+REVIEW = {'verdict': 'ACCEPT', 'ready_percent': 90, 'correctness': 'Checks pass', 'value': 'First run no longer fails',
           'reason': 'Demonstrated useful contribution', 'evidence': ['test -f b.txt'], 'checks': [CHECK], 'findings': []}
 FINAL = {'status': 'ACHIEVED', 'before': 'First run failed', 'after': 'First run succeeds',
          'evidence': ['Run test -f b.txt'], 'checks': [CHECK],
@@ -90,6 +91,9 @@ class Repo(unittest.TestCase):
         state = self.state()
         state.update(updates)
         (self.wt / '.atelier/goal/state.json').write_text(json.dumps(state))
+
+    def time_up(self):
+        self.set_state(finish_at=time.time() - 1)
 
     def route(self, expected=None):
         r = self.cmd('route', self.run_id or 'auto', self.deadline, 50, 50, 30, 1)
@@ -224,7 +228,7 @@ class Outcomes(Repo):
         self.assertEqual(self.result({'status':'READY','summary':'Bug','checks':[{**CHECK,'exit_code':1}],'evidence':['b.txt']}), 'RECOVER')
         self.assertEqual(self.state()['phase'], 'IMPLEMENT')
 
-    def test_multiple_commits_review_repair_and_early_demonstration(self):
+    def test_multiple_commits_review_repair_and_final_demonstration(self):
         self.build()
         self.result({**REVIEW, 'verdict': 'REVISE', 'findings': ['Add recovery path; verify c.txt'], 'repair_estimate_seconds': 5})
         self.route('IMPLEMENT')
@@ -232,8 +236,7 @@ class Outcomes(Repo):
         self.result({'status': 'READY', 'summary': 'Recovery works', 'checks': [CHECK], 'evidence': ['b.txt and c.txt']})
         self.route('REVIEW')
         self.result(REVIEW)
-        self.route('SUPERVISE')
-        self.result({**SUPERVISE, 'action': 'FINISH'})
+        self.time_up()
         self.route('FINALIZE')
         self.assertEqual(self.result(FINAL), 'GOAL_DONE')
         state = self.state()
@@ -274,7 +277,8 @@ class Outcomes(Repo):
         self.result({**REVIEW, 'verdict': 'REVISE', 'findings': ['Fix recovery'], 'repair_estimate_seconds': 5})
         state = self.state()
         self.assertEqual(state['milestones'][0]['status'], 'DEFERRED')
-        self.assertEqual(state['phase'], 'FINALIZE')
+        self.assertEqual(state['phase'], 'SUPERVISE')
+        self.assertEqual(state['status'], 'ACTIVE')
         self.assertEqual(git(self.wt, 'rev-parse', 'HEAD'), self.base)
 
     def test_protocol_recovery_does_not_repeat_committed_work(self):
@@ -301,22 +305,83 @@ class Outcomes(Repo):
         self.assertEqual(self.state()['status'], 'OPERATIONAL_FAILURE')
         self.assertEqual(git(self.wt, 'rev-parse', 'HEAD'), self.base)
 
-    def test_implementation_blocker_preserves_uncommitted_checkpoint(self):
+    def test_implementation_blocker_saves_the_attempt_and_the_run_continues(self):
         self.init()
         self.route()
         self.result(SUPERVISE)
         self.route('IMPLEMENT')
+        self.commit('c.txt')
         (self.wt / 'b.txt').write_text('unfinished')
-        self.result({'status': 'BLOCKED', 'reason': 'Required product decision'})
-        self.assertEqual(self.state()['status'], 'BLOCKED')
-        self.assertTrue((self.wt / 'b.txt').exists())
+        self.result({'status': 'BLOCKED', 'reason': 'The runner rejects it: observed error X'})
+        state = self.state()
+        item = state['milestones'][0]
+        self.assertEqual((state['status'], state['phase'], item['status']), ('ACTIVE', 'SUPERVISE', 'BLOCKED'))
+        self.assertEqual(git(self.wt, 'rev-parse', 'HEAD'), self.base)
+        self.assertFalse((self.wt / 'b.txt').exists())
+        self.assertEqual(git(self.wt, 'show', item['checkpoint_ref'] + ':b.txt'), 'unfinished')
+        self.assertEqual(git(self.wt, 'show', item['checkpoint_ref'] + ':c.txt'), 'c.txt')
+        self.assertIn('observed error X', (self.wt / '.atelier/implementations/index.md').read_text())
+        self.assertIn('Expected risk: The runner may not allow it. Not kept: The runner rejects it',
+                      (self.wt / '.atelier/goal/handoff.md').read_text())
+        self.route('SUPERVISE')
+
+    def test_blocker_without_changes_needs_no_ref(self):
+        self.init()
+        self.route()
+        self.result(SUPERVISE)
+        self.route('IMPLEMENT')
+        self.result({'status': 'BLOCKED', 'reason': 'Needs a product decision'})
+        item = self.state()['milestones'][0]
+        self.assertEqual(item['status'], 'BLOCKED')
+        self.assertNotIn('checkpoint_ref', item)
+        self.route('SUPERVISE')
+
+    def test_supervisor_cannot_finish_early(self):
+        self.build()
+        self.result(REVIEW)
+        self.route('SUPERVISE')
+        self.assertEqual(self.result({**SUPERVISE, 'action': 'FINISH'}), 'RECOVER')
+        self.assertIn('FINISH is not available', self.state()['reason'])
+        self.route('SUPERVISE')
+
+    def test_ideas_grow_at_every_checkpoint(self):
+        self.build()
+        self.result(REVIEW)
+        self.route('SUPERVISE')
+        idea = {**BRIEF['opportunities'][0], 'id': 'bolder'}
+        second = {**SUPERVISE, 'new_opportunities': [idea],
+                  'milestone': {**MILESTONE, 'opportunity': 'bolder', 'depends_on': [self.state()['milestones'][0]['id']]}}
+        second.pop('brief')
+        self.result(second)
+        state = self.state()
+        self.assertEqual([o['id'] for o in state['brief']['opportunities']][-1], 'bolder')
+        self.assertEqual(state['phase'], 'IMPLEMENT')
+        self.route('IMPLEMENT')
+
+    def test_milestone_must_state_ambition_and_valid_dependencies(self):
+        self.init()
+        self.route()
+        self.assertEqual(self.result({**SUPERVISE, 'milestone': {**MILESTONE, 'ambition': 'huge'}}), 'RECOVER')
+        self.assertEqual(self.result({**SUPERVISE, 'milestone': {**MILESTONE, 'depends_on': ['9999']}}), 'RECOVER')
+        self.result(SUPERVISE)
+        self.assertEqual(self.state()['phase'], 'IMPLEMENT')
+
+    def test_accept_with_notes_needs_seventy_percent_ready(self):
+        self.build()
+        self.assertEqual(self.result({**REVIEW, 'ready_percent': 60}), 'RECOVER')
+        self.assertEqual(self.result({**REVIEW, 'ready_percent': 'most'}), 'RECOVER')
+        self.result({**REVIEW, 'ready_percent': 70, 'notes': ['Label wraps at 320px']})
+        state = self.state()
+        self.assertEqual(state['milestones'][0]['status'], 'ACCEPT')
+        handoff = (self.wt / '.atelier/goal/handoff.md').read_text()
+        self.assertIn('Reviewer notes: Label wraps at 320px', handoff)
+        self.assertIn(f"git cherry-pick {self.base[:12]}..{state['accepted_head'][:12]}", handoff)
 
     def test_final_achievement_requires_every_success_criterion(self):
         self.build()
         self.result(REVIEW)
-        self.route()
-        self.result({**SUPERVISE, 'action': 'FINISH'})
-        self.route()
+        self.time_up()
+        self.route('FINALIZE')
         self.assertEqual(self.result({**FINAL, 'criteria': []}), 'RECOVER')
         self.assertEqual(self.state()['status'], 'ACTIVE')
         self.assertEqual(self.result({**FINAL, 'status': 'PARTIAL', 'criteria': 'malformed'}), 'RECOVER')
@@ -326,7 +391,7 @@ class Outcomes(Repo):
     def test_integration_findings_get_bounded_repair_in_reserve(self):
         self.build()
         self.result(REVIEW)
-        self.set_state(finish_at=time.time() - 1)
+        self.time_up()
         self.route('FINALIZE')
         self.result({**FINAL, 'status': 'REVISE', 'milestone': {**MILESTONE, 'title': 'Integration repair'}})
         self.route('IMPLEMENT')
@@ -351,26 +416,46 @@ class Budgets(Repo):
         self.init()
         self.route()
         self.result(SUPERVISE)
-        self.set_state(finish_at=time.time() - 1)
+        self.time_up()
         self.route('FINALIZE')
         self.assertEqual(self.state()['milestones'][0]['status'], 'DEFERRED')
         self.assertEqual(git(self.wt, 'rev-parse', 'HEAD'), self.base)
 
-    def test_time_and_usage_reserve_stop_new_work_but_allow_finalization(self):
+    def test_usage_buffer_waits_for_a_reset_instead_of_finishing(self):
         self.init()
         self.route()
         self.result(SUPERVISE)
         (self.scripts / 'meters.json').write_text('[52, 99, 99]')
-        self.route('FINALIZE')
-        self.assertIsNone(self.state()['active'])
+        self.route('USAGE_PAUSED')
+        self.assertEqual(self.state()['status'], 'ACTIVE')
+        self.assertEqual(self.state()['milestones'][0]['status'], 'BUILDING')
+        (self.scripts / 'meters.json').write_text('[90, 99, 99]')
+        self.route('IMPLEMENT')
+
+    def test_usage_buffer_still_allows_review_and_repairs(self):
+        self.build()
+        (self.scripts / 'meters.json').write_text('[52, 99, 99]')
+        self.route('REVIEW')
+        self.result({**REVIEW, 'verdict': 'REVISE', 'findings': ['Fix c'], 'repair_estimate_seconds': 5})
+        self.route('IMPLEMENT')
+
+    def test_selected_milestone_that_no_longer_fits_returns_to_supervisor(self):
+        self.init()
+        self.route()
+        self.result(SUPERVISE)
+        self.set_state(finish_at=time.time() + 5)
+        self.route('SUPERVISE')
         self.assertEqual(self.state()['milestones'][0]['status'], 'DEFERRED')
+        self.assertIn('smaller', self.state()['reason'])
 
     def test_estimate_must_fit_feature_budget(self):
         self.init()
         self.route()
         self.result({**SUPERVISE, 'milestone': {**MILESTONE, 'estimated_seconds': 4000}})
-        self.assertEqual(self.state()['phase'], 'FINALIZE')
+        self.assertEqual(self.state()['phase'], 'SUPERVISE')
         self.assertEqual(self.state()['milestones'], [])
+        self.assertIn('choose a smaller one', self.state()['reason'])
+        self.route('SUPERVISE')
 
     def test_missing_usage_pauses_and_does_not_launch_a_stage(self):
         self.init()
@@ -378,7 +463,9 @@ class Budgets(Repo):
         self.route('USAGE_PAUSED')
         self.assertIsNone(self.state()['request'])
         (self.scripts / 'meters.json').write_text('[50, 50, 30]')
-        self.route('FINALIZE')  # exactly floors permits finishing, but not new work with buffer
+        self.route('USAGE_PAUSED')  # exactly floors permits finishing, but new work waits for the buffer
+        self.time_up()
+        self.route('FINALIZE')
 
     def test_deadline_writes_partial_handoff_without_launching_agents(self):
         self.init()
@@ -392,8 +479,9 @@ class Budgets(Repo):
         self.build()
         self.result({**REVIEW, 'verdict': 'REVISE', 'findings': ['Fix c'], 'repair_estimate_seconds': 30})
         self.set_state(handoff_seconds=3599)
-        self.route('FINALIZE')
+        self.route('SUPERVISE')  # the supervisor may still pick a smaller idea before the reserve
         self.assertEqual(self.state()['milestones'][0]['status'], 'DEFERRED')
+        self.assertEqual(git(self.wt, 'rev-parse', 'HEAD'), self.base)
 
 
 class SharedHistory(Repo):
@@ -432,6 +520,10 @@ class NativeLoop(Repo):
         self.agent_state = self.tmp / 'agents'
         self.agent_state.mkdir()
 
+    # Fixture shortcut: expire the feature budget so the controller starts the final demonstration.
+    EXPIRE = ("python3 -c \"import json; from pathlib import Path; p=Path('.atelier/goal/state.json'); "
+              "s=json.loads(p.read_text()); s['finish_at']=0; p.write_text(json.dumps(s))\"")
+
     def script(self, role, turns):
         # Fixture agent writes result JSON from current request/Git state, with arbitrary chat output.
         scripted = []
@@ -453,7 +545,7 @@ class NativeLoop(Repo):
                               capture_output=True, text=True, timeout=90)
 
     def test_complete_native_run_with_repair_multiple_commits_and_no_markers(self):
-        self.script('supervisor', [('true', SUPERVISE), ('true', {**SUPERVISE, 'action': 'FINISH'})])
+        self.script('supervisor', [('true', SUPERVISE), (self.EXPIRE, SUPERVISE)])
         self.script('claude', [
             ("printf b > b.txt\ngit add b.txt\ngit commit -qm first", {'status':'READY','summary':'First run','checks':[CHECK],'evidence':['b.txt']}),
             ("printf c > c.txt\ngit add c.txt\ngit commit -qm repair", {'status':'READY','summary':'Recovery','checks':[CHECK],'evidence':['c.txt']})])
@@ -471,7 +563,7 @@ class NativeLoop(Repo):
         self.assertIn('concrete findings', (self.agent_state / 'claude.prompt.2').read_text())
 
     def test_native_protocol_recovery_continues_same_stage(self):
-        self.script('supervisor', [('true', {}), ('true', {**SUPERVISE, 'action':'FINISH'})])
+        self.script('supervisor', [('true', {}), (self.EXPIRE, SUPERVISE)])
         self.script('finalizer', [('true', {**FINAL, 'status':'PARTIAL', 'remaining':['No implementation selected']})])
         r = self.flow()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -481,7 +573,7 @@ class NativeLoop(Repo):
         self.assertTrue(any(e['kind'] == 'PROTOCOL_ERROR' for e in self.state()['events']))
 
     def test_native_transport_failure_preserves_draft_and_resumes_same_run(self):
-        self.script('supervisor', [('true', SUPERVISE), ('true', {**SUPERVISE, 'action':'FINISH'})])
+        self.script('supervisor', [('true', SUPERVISE), (self.EXPIRE, SUPERVISE)])
         self.script('claude', [("printf draft > b.txt\nexit 1", {})])
         self.script('codex', [('test -f b.txt', REVIEW)])
         self.script('finalizer', [('test -f b.txt', FINAL)])

@@ -112,6 +112,7 @@ def run_snapshot(path, project):
                   "accepted": sum(m["status"] == "ACCEPT" for m in milestones),
                   "abandoned": sum(m["status"] == "ABANDON" for m in milestones),
                   "deferred": sum(m["status"] == "DEFERRED" for m in milestones),
+                  "blocked": sum(m["status"] == "BLOCKED" for m in milestones),
                   "repairs": sum(m.get("revisions", 0) for m in milestones),
                   "usage pauses": sum(t["paused"] for t in ticks)}
     run = {"id": str(path), "name": path.name, "project": str(project),

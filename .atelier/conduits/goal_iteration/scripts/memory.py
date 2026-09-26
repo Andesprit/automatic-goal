@@ -74,7 +74,7 @@ def index(root):
         if doc.name in {"index.md", "INDEX.md"}:
             continue
         body = doc.read_text(errors="replace")
-        verdicts = re.findall(r"^VERDICT:\s*(ACCEPT|REVISE|ABANDON|DEFERRED|KEEP|DISCARD)\s*$", body, re.M)
+        verdicts = re.findall(r"^VERDICT:\s*(ACCEPT|REVISE|ABANDON|DEFERRED|BLOCKED|KEEP|DISCARD)\s*$", body, re.M)
         verdict = verdicts[-1] if verdicts else "INCOMPLETE / UNREVIEWED"
         # Include the idea and the review reason, keeping the full record one link away.
         idea = re.split(r"^## ", body, maxsplit=1, flags=re.M)[0]

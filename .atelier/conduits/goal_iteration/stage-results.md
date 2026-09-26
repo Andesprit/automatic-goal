@@ -24,7 +24,8 @@ tradeoff; avoid a chronological work log. Keep commands and test counts in evide
 On repairs, summarize the complete milestone, including the original change and the repair,
 so the report describes all the work rather than just the last fix.
 
-For ABANDON, the report combines that implementation paragraph with the reviewer’s `reason`.
+For ABANDON and BLOCKED, the report combines that paragraph with the milestone's `risk` and the
+reviewer's `reason` (or the implementer's blocked `reason`).
 Use `reason` to explain why the approach was dropped, what observation or evidence led to
 that decision, and the resulting limitation or lesson. Do not repeat the implementation
 summary or imply that abandoned work was delivered. Each discarded idea should read as one
@@ -66,11 +67,18 @@ use exit code 0 for pass or 1 for fail. Include actual elapsed time; no assertio
     "primary": "primary",
     "fallback": "fallback",
     "selection_reason": "Why A deserves time more than the alternatives",
-    "research": "Named uncertainty resolved by competitor research, or why it was unnecessary"
+    "research": "What competitor or best-in-class research showed, or why it was unnecessary"
   },
+  "new_opportunities": [
+    {"id":"bolder-idea","title":"Opportunity C","benefit":"User benefit","evidence":"Observed evidence","effort":"Estimate with rationale","uncertainty":"Unverified assumptions"}
+  ],
   "milestone": {
     "title": "An independently useful piece of the experience",
     "opportunity": "primary",
+    "ambition": "bold",
+    "upside": "What the experience gains if this works",
+    "risk": "Why it might fail",
+    "depends_on": [],
     "benefit": "How this materially contributes to the chosen outcome",
     "acceptance": ["Observable milestone completion criterion"],
     "scope": ["Expected files/components and scope boundaries"],
@@ -80,13 +88,18 @@ use exit code 0 for pass or 1 for fail. Include actual elapsed time; no assertio
 }
 ```
 
-Actions: BUILD, SIMPLIFY, SWITCH, FINISH, BLOCKED. The first three require `milestone`;
-FINISH and BLOCKED request a final assessment and need no milestone. The brief is required
-initially and otherwise retained. Normally compare three to five opportunities, with at
-least two credible alternatives. Do not regenerate the list at every checkpoint. A changed
+Actions: BUILD, SIMPLIFY, SWITCH, BLOCKED. The first three require `milestone`. There is no
+FINISH: the run works until the finishing reserve, then the controller requests the final
+demonstration. BLOCKED requests it early and is only for when no useful work of any kind is
+possible without a human. The brief is required initially and otherwise retained. Normally
+compare three to five opportunities, with at least two credible alternatives. Add ideas at any
+checkpoint with `new_opportunities` (optional; unique new IDs); a milestone can serve one of them
+in the same result. When the brief's criteria are met, raise the bar with bolder ideas. A changed
 brief requires `replan_reason` explaining the new evidence; previous briefs remain in events.
-The estimate includes implementation **and review**. The controller refuses new work that
-cannot finish before the finishing reserve. FINISH can end a successful run early.
+`ambition` is `bold`, `normal` or `polish`; `upside` and `risk` are required text. `depends_on`
+(optional) lists accepted milestone IDs this one builds on, so a human can pick milestones.
+The estimate includes implementation **and review**. A milestone that cannot finish before the
+finishing reserve is refused and the supervisor is asked again for a smaller one.
 
 ## IMPLEMENT
 
@@ -96,19 +109,27 @@ cannot finish before the finishing reserve. FINISH can end a successful run earl
 
 Multiple focused commits may extend the active milestone's base. Leave the tree clean and
 do not rewrite earlier commits. During a review repair, address `milestones[active].reviews`
-findings on top of the current work. For a genuine blocker, return instead:
+findings on top of the current work. If the idea proves unworkable or a genuine blocker stops
+it, return instead:
 
 ```json
-{"request_id":"copy request.id","status":"BLOCKED","reason":"Concrete missing decision or execution blocker; work preserved"}
+{"request_id":"copy request.id","status":"BLOCKED","reason":"What was tried, what was observed, and why it failed or what is missing"}
 ```
+
+The controller commits any uncommitted attempt, saves it under
+`refs/automatic-goal/<run-id>/<milestone-id>`, rolls back only this milestone, logs the reason
+and returns to the supervisor. The run continues.
 
 ## REVIEW
 
 ```json
-{"request_id":"copy request.id","head":"full reviewed commit hash","verdict":"REVISE","correctness":"Independent correctness conclusion","value":"Demonstrated contribution to the outcome","evidence":["Evidence supporting both conclusions"],"checks":[{"command":"independent test","exit_code":1,"summary":"failure reproduced","duration_seconds":1}],"findings":["Concrete required repair and how to verify completion"],"reason":"Expected benefit justifies remaining repair cost","repair_estimate_seconds":300}
+{"request_id":"copy request.id","head":"full reviewed commit hash","verdict":"REVISE","ready_percent":55,"correctness":"Independent correctness conclusion","value":"Demonstrated contribution to the outcome","evidence":["Evidence supporting both conclusions"],"checks":[{"command":"independent test","exit_code":1,"summary":"failure reproduced","duration_seconds":1}],"findings":["Concrete required repair and how to verify completion"],"notes":[],"reason":"Expected benefit justifies remaining repair cost","repair_estimate_seconds":300}
 ```
 
-Verdicts: ACCEPT, REVISE, ABANDON. ACCEPT requires no unresolved required `findings`.
+Verdicts: ACCEPT, REVISE, ABANDON. `ready_percent` (integer 0-100, required) is the share of
+the change the reviewer would keep exactly as it is. ACCEPT requires `ready_percent` of at least
+70, passing checks and no unresolved required `findings`. Small non-blocking issues go in
+`notes` (optional list); the report shows them to the human who picks milestones after the run.
 REVISE requires findings and a positive `repair_estimate_seconds` including re-review.
 ABANDON explains weak value, a disproven hypothesis, or unjustified repair cost. The runner
 records exhausted repair budgets as DEFERRED, not a judgment that the idea lacked value.
@@ -135,7 +156,8 @@ Milestone acceptance does not establish overall outcome achievement.
 Statuses: ACHIEVED, PARTIAL, BLOCKED, REVISE. ACHIEVED requires every brief success criterion
 in the same order, `met: true`, and evidence. Never infer achievement from passing unit tests
 or accepted commit counts alone. PARTIAL/BLOCKED explain unproven or unfinished work.
-REVISE includes a `milestone` object with the SUPERVISE shape for a narrow integration repair.
+REVISE includes a `milestone` object with the SUPERVISE shape (including `ambition`, `upside`
+and `risk`) for a narrow integration repair.
 No new feature work is allowed. The controller bounds integration repairs and preserves
 handoff time. If time/usage prevents an agent demonstration, the automatic handoff explicitly
 records PARTIAL and retained evidence instead of fabricating a successful final assessment.

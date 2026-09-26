@@ -13,6 +13,11 @@ def unique(items):
     return list(dict.fromkeys(item.strip() for item in items if isinstance(item, str) and item.strip()))
 
 
+def sentence(value):
+    value = value.strip()
+    return value + "." if value and not value.endswith((".", "!", "?")) else value
+
+
 def duration(seconds):
     if seconds is None:
         return "Time unavailable"
@@ -34,16 +39,23 @@ def summarize(state, now=None):
         status = item.get("status", "UNREVIEWED")
         entry = {"title": item.get("title", "Untitled improvement"),
                  "detail": implementation.get("summary") or item.get("benefit", ""),
-                 "id": item.get("id", ""), "status": status}
+                 "id": item.get("id", ""), "status": status, "extra": []}
+        if item.get("checkpoint_ref"):
+            entry["extra"].append(f"Saved at `{item['checkpoint_ref']}`")
         if status == "ACCEPT":
             entry["evidence"] = unique(latest.get("evidence", []))
+            notes = unique(latest.get("notes", []))
+            if notes:
+                entry["extra"].append("Reviewer notes: " + "; ".join(notes))
+            if item.get("depends_on"):
+                entry["extra"].append("Builds on: " + ", ".join(item["depends_on"]))
+            if item.get("base") and item.get("head"):
+                entry["extra"].append(f"Take it: `git cherry-pick {item['base'][:12]}..{item['head'][:12]}`")
             done.append(entry)
-        elif status == "ABANDON":
-            attempt = entry["detail"].strip()
-            if attempt and not attempt.endswith((".", "!", "?")):
-                attempt += "."
-            reason = latest.get("reason") or "No abandonment reason recorded."
-            entry["detail"] = " ".join(part for part in (attempt, f"Not kept: {reason}") if part)
+        elif status in {"ABANDON", "BLOCKED"}:
+            reason = (item.get("blocker") if status == "BLOCKED" else latest.get("reason")) or "No reason recorded."
+            risk = f"Expected risk: {sentence(item['risk'])}" if item.get("risk") else ""
+            entry["detail"] = " ".join(part for part in (sentence(entry["detail"]), risk, f"Not kept: {reason}") if part)
             abandoned.append(entry)
         else:
             entry["detail"] = ("Deferred. " if status == "DEFERRED" else "Not yet accepted. ") + (
@@ -76,6 +88,8 @@ def markdown(summary):
     lines = [f"**{summary['status']} · {summary['elapsed']}**", "", summary["headline"], "", "### Done", ""]
     for item in summary["done"]:
         lines += [f"**{item['title']}**", "", item["detail"], ""]
+        if item.get("extra"):
+            lines += [f"- {line}" for line in item["extra"]] + [""]
     if not summary["done"]:
         lines.append("No reviewed improvements recorded.")
     if summary["pending"] or summary["remaining"]:
@@ -94,6 +108,8 @@ def markdown(summary):
         lines += ["", "### Explored, not kept", ""]
         for item in summary["abandoned"]:
             lines += [f"**{item['title']}**", "", item["detail"], ""]
+            if item.get("extra"):
+                lines += [f"- {line}" for line in item["extra"]] + [""]
     if summary["branch"]:
         lines += ["", f"Branch: `{summary['branch']}`"]
     return "\n".join(lines) + "\n"

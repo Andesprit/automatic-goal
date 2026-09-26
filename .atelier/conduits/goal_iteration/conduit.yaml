@@ -45,24 +45,34 @@ tasks:
       from a usability proxy. Record reproducible baseline steps, failures, timings or measurements.
 
       Compare normally three to five meaningful opportunities (at least two credible alternatives),
-      including user benefit, evidence, effort and uncertainty. Choose a primary and a fallback;
-      explain why the primary deserves the available time more than the alternatives. Research
-      competitors only to resolve a named uncertainty, before choosing work; record why research
-      was useful or unnecessary. Avoid invented precision or arbitrary numerical value scores.
+      including user benefit, evidence, effort and uncertainty. Rank them by upside: how much better
+      the experience gets if the idea works. Uncertainty is a reason to try an idea, not to skip it;
+      a failed bold attempt is a normal, logged outcome. Choose a primary and a fallback; explain why
+      the primary deserves the time. Research competitors and the best products in the space when it
+      sharpens an idea or reveals a bolder one. Avoid invented precision or arbitrary value scores.
 
       Read .atelier/implementations/index.md and relevant prior decisions, including failures and
-      unfinished attempts. Verify which accepted commits actually exist on this branch. Do not
-      repeat work without new evidence. Preserve the chosen outcome between checkpoints; an
-      explicit evidence-backed replan can update the brief, retaining history in the event log.
+      unfinished attempts. Check that accepted commits exist on this branch with git log; do not
+      rerun their checks or screenshots, the reviewer already verified them. Do not retry a failed
+      approach without new evidence. Preserve the chosen outcome between checkpoints; an explicit
+      evidence-backed replan can update the brief, retaining history in the event log.
 
-      At every checkpoint ask: Are we improving the original experience? What did we learn?
-      Is it better to finish, simplify, repair, or switch? What can finish confidently in the
-      remaining feature budget? Choose a coherent, independently useful milestone, sized to the
-      outcome across files and multiple small commits. Explain its contribution and provide exact
-      acceptance checks and an estimate INCLUDING implementation and review. Small fixes are valid
-      when they remove an important obstacle or complete the experience. Do not fill remaining
-      time with low-value features. FINISH requests integrated validation and a demonstration,
-      including early completion. SWITCH requires evidence and a compared alternative.
+      This run works until its time is used; there is no early finish. The controller starts the
+      final demonstration when the finishing reserve arrives. Meeting the brief's success criteria
+      is not the end: raise the bar. Add new_opportunities whenever you see them, and whenever only
+      small polish is left, generate bolder ones (what would make a user say "wow"; what the best
+      product in this space does; what a designer, a power user or a newcomer would demand). Parts
+      of the user's goal nobody has tried yet come before polish. A human reviews every milestone
+      after the run and picks what to keep, so ambition is safe; the reviewer blocks broken work.
+
+      At every checkpoint ask: What did we learn? What is the boldest idea that can be built and
+      reviewed in the remaining feature budget? Choose a coherent, independently useful milestone
+      across files and multiple small commits. Keep milestones independent so a human can take any
+      one of them; list accepted milestone IDs it builds on in depends_on. Mark its ambition (bold,
+      normal or polish), its upside if it works, and the risk of why it might fail. Provide exact
+      acceptance checks and an estimate INCLUDING implementation and review; when little time is
+      left, pick a smaller idea rather than stopping. SWITCH requires evidence and a compared
+      alternative. Return BLOCKED only when no useful work of any kind is possible without a human.
 
       You may inspect the app and run baseline checks but may not change code or Git state.
       Return the SUPERVISE result described in stage-results.md.
@@ -118,12 +128,14 @@ tasks:
       valid evidence for unchanged code, but validate new behavior. Record commands, exit codes,
       pass/fail summaries and elapsed seconds. Do not pad assertion counts as evidence of value.
 
-      Capture before/after user-path evidence and measured results where applicable. Keep screenshots
-      or recordings for UI changes under .atelier/goal/evidence; record reproducible commands for
-      agent workflows. Commit only passing, nonempty changes on the current branch. Finish with a
-      clean tree and READY result tied to HEAD. If a required human decision or genuine execution
-      block prevents completion, preserve work and return BLOCKED with a concrete reason. Do not
-      misclassify a malformed result as an implementation failure.
+      Build the full ambition of the milestone, not a timid subset. Capture before/after user-path
+      evidence and measured results where applicable. Keep screenshots or recordings for UI changes
+      under .atelier/goal/evidence; record reproducible commands for agent workflows. Commit only
+      passing, nonempty changes on the current branch. Finish with a clean tree and READY result
+      tied to HEAD. If the idea proves unworkable, or a human decision or execution block prevents
+      completion, stop and return BLOCKED: say what you tried, what you observed and why it failed.
+      That is a normal outcome; the controller saves your work under a ref and the run continues.
+      Do not misclassify a malformed result as an implementation failure.
 
       Goal requested by the user: {{inputs.goal}}
 
@@ -171,11 +183,17 @@ tasks:
       independently, and broaden only when scope, failures or uncertainty justify it. Record exact
       commands, exit codes, summaries and elapsed seconds. Test counts alone do not prove value.
 
-      ACCEPT: demonstrated contribution, sufficiently reliable, no required findings left.
-      REVISE: worthwhile approach with fixable problems. Give concrete required findings and their
-      completion criteria, estimate remaining repair plus re-review time, and explain why its
-      expected benefit still justifies that cost. Ignore sunk cost when making this decision.
-      ABANDON: weak value, disproven hypothesis, or unjustified repair cost. Explain the learning.
+      Score ready_percent: the share of the change you would keep exactly as it is (0-100).
+      ACCEPT: demonstrated contribution, reliable, and at least 70 percent ready. Small issues
+      (cosmetic details, minor edge cases, follow-up polish) do not block: list them in notes, and
+      a human reviews them after the run. Required findings must be empty.
+      REVISE: worthwhile approach with blocking problems (broken or regressed behavior, failing
+      checks, accessibility failures, data risk) or less than 70 percent ready. Give concrete
+      required findings and their completion criteria, estimate remaining repair plus re-review
+      time, and explain why its expected benefit still justifies that cost. Ignore sunk cost.
+      ABANDON: weak value, disproven hypothesis, or unjustified repair cost. Explain what was tried,
+      what you observed, why it failed and what the next attempt should learn. Judge the work, not
+      its ambition: a bold idea that works deserves ACCEPT; one that fails is a useful record.
       The controller bounds repairs by the remaining time and configured rounds. Budget exhaustion
       is recorded as DEFERRED, separately from rejecting the idea. Rejected/deferred commits are
       preserved under a checkpoint ref before rollback of this milestone only.
@@ -232,7 +250,8 @@ tasks:
       return REVISE with a narrowly scoped integration milestone and its repair/review time estimate;
       the controller checks the remaining reserve and a bounded number of integration repairs.
       Do not start new features during this phase. Tests may run, but do not change code or Git state.
-      Do not mark the outcome achieved merely because time or usage is nearly exhausted.
+      Do not mark the outcome achieved merely because time or usage is nearly exhausted. A human
+      picks milestones from this branch after the run: note which ones depend on each other.
 
       Goal requested by the user: {{inputs.goal}}
 

@@ -17,6 +17,9 @@ import session_report
 
 
 TERMINAL = {"ACHIEVED", "PARTIAL", "BLOCKED", "OPERATIONAL_FAILURE"}
+AMBITIONS = {"bold", "normal", "polish"}
+# A reviewer may accept with small notes only when at least this share of the change is ready as is.
+ACCEPT_READY_PERCENT = 70
 
 
 def git(*args):
@@ -96,12 +99,18 @@ def detailed_report(state):
         lines += [f"### {item['id']}: {item['title']} — {item['status']}",
                   item["benefit"], f"Base: {item['base']} · HEAD: {item.get('head', 'uncommitted')}",
                   f"Repair rounds: {item['revisions']}"]
+        if item.get("ambition"):
+            lines.append(f"Ambition: {item['ambition']} · Upside: {item['upside']} · Risk: {item['risk']}")
+        if item.get("blocker"):
+            lines.append(f"Blocked: {item['blocker']}")
         if item.get("checkpoint_ref"):
             lines.append(f"Preserved implementation: {item['checkpoint_ref']}")
         for review in item.get("reviews", []):
-            lines += [f"{review['verdict']}: {review['reason']}",
+            ready = f" ({review['ready_percent']}% ready)" if "ready_percent" in review else ""
+            lines += [f"{review['verdict']}{ready}: {review['reason']}",
                       f"Correctness: {review['correctness']}", f"Value: {review['value']}",
-                      *[f"- {e}" for e in review["evidence"]]]
+                      *[f"- {e}" for e in review["evidence"]],
+                      *[f"- Note: {n}" for n in review.get("notes", [])]]
     if state.get("active") is not None:
         lines += ["", "An unfinished milestone remains. This branch is not reported as ready to merge."]
     lines += ["", "## Success criteria"]
@@ -126,7 +135,7 @@ def save(path, state):
     atomic(path / "handoff.md", report(state))
 
 
-def initialize(deadline, reserve=20, revisions=2, buffer=5):
+def initialize(deadline, reserve=10, revisions=2, buffer=5):
     branch = guard(clean=True)
     now = time.time()
     if deadline <= now:
@@ -201,14 +210,16 @@ def journal(state):
             f"## Value\n{item['benefit']}", f"## Status\n{item['status']}",
             f"## Checkpoint\n{item['base']}..{item.get('head', 'pending')}",
             "## Record\n" + json.dumps(item, indent=2)]
-    if item["status"] in {"ACCEPT", "ABANDON", "DEFERRED"}:
-        body.append(f"## Verdict\nVERDICT: {item['status']}")
+    if item["status"] in {"ACCEPT", "ABANDON", "DEFERRED", "BLOCKED"}:
+        # Keep why an idea was not kept next to the verdict, so later checkpoints do not retry it blindly.
+        why = item.get("blocker") or (item["reviews"][-1]["reason"] if item["reviews"] else "")
+        body.append(f"## Verdict\nVERDICT: {item['status']}\n{why}".rstrip())
     atomic(root / f"{item['id']}.md", "\n\n".join(body) + "\n")
     memory.index(root)
 
 
 def retire(state, status):
-    """Preserve rejected/deferred commits under a ref before rolling back this milestone."""
+    """Preserve rejected/deferred/blocked commits under a ref before rolling back this milestone."""
     item = active(state)
     check_git(state, expected=item["head"])
     ref = f"refs/automatic-goal/{state['id']}/{item['id']}"
@@ -271,20 +282,31 @@ def validate_brief(brief):
 
 
 def validate_milestone(item, state):
-    for key in ("title", "benefit"):
+    for key in ("title", "benefit", "upside", "risk"):
         text(item[key], key)
     for key in ("acceptance", "scope", "checks"):
         texts(item[key], key)
     positive(item["estimated_seconds"], "estimated_seconds")
+    if item["ambition"] not in AMBITIONS:
+        raise ValueError("ambition must be bold, normal, or polish")
     if item["opportunity"] not in {o["id"] for o in state["brief"]["opportunities"]}:
         raise ValueError("milestone must serve a compared opportunity")
+    depends = item.get("depends_on", [])
+    texts(depends, "depends_on", False)
+    if not set(depends) <= {m["id"] for m in state["milestones"] if m["status"] == "ACCEPT"}:
+        raise ValueError("depends_on must list accepted milestone IDs")
 
 
 def start_milestone(state, proposal, integration=False):
     validate_milestone(proposal, state)
     limit = state["deadline"] - state["handoff_seconds"] if integration else state["finish_at"]
     if time.time() + proposal["estimated_seconds"] > limit:
-        state.update(phase="FINALIZE", reason="Proposed work cannot finish within its budget.")
+        if integration:
+            state.update(phase="FINALIZE", reason="Proposed work cannot finish within its budget.")
+        else:
+            # Too big is not a reason to stop: ask the supervisor for something that fits.
+            state["reason"] = (f"Proposed milestone needs {proposal['estimated_seconds']}s but only "
+                               f"{max(0, int(limit - time.time()))}s of feature time remain; choose a smaller one.")
         return
     item = {**proposal, "id": memory.reserve(Path(".atelier/implementations")),
             "base": state["accepted_head"], "status": "BUILDING", "revisions": 0,
@@ -303,6 +325,11 @@ def supervise(state, result):
         text(result["replan_reason"], "replan_reason")
         validate_brief(result["brief"])
         state["brief"] = result["brief"]
+    added = result.get("new_opportunities", [])
+    if added:
+        # Ideas grow at every checkpoint, so meeting the first brief never runs the list dry.
+        state["brief"] = {**state["brief"], "opportunities": state["brief"]["opportunities"] + added}
+        validate_brief(state["brief"])
     for key in ("reason", "learning", "priority"):
         text(result[key], key)
     state.update(reason=result["reason"], priority=result["priority"])
@@ -310,7 +337,8 @@ def supervise(state, result):
     if action in {"BUILD", "SIMPLIFY", "SWITCH"}:
         start_milestone(state, result["milestone"])
     elif action == "FINISH":
-        state["phase"] = "FINALIZE"
+        raise ValueError("FINISH is not available: keep improving until the finishing reserve; "
+                         "the controller starts the final demonstration")
     elif action == "BLOCKED":
         state.update(phase="FINALIZE", reason=result["reason"])
     else:
@@ -319,9 +347,24 @@ def supervise(state, result):
 
 def implemented(state, result):
     if result["status"] == "BLOCKED":
+        # A blocked or disproven idea is a normal outcome: save the attempt, log why, keep going.
         text(result["reason"], "reason")
-        state.update(status="BLOCKED", reason=result["reason"], finished=time.time())
-        active(state)["status"] = "BLOCKED"
+        item = active(state)
+        check_git(state, clean=False)
+        git("merge-base", "--is-ancestor", item["base"], "HEAD")
+        if dirty():
+            # An exclude pathspec fails when .atelier is ignored, so stage all and unstage .atelier.
+            git("add", "-A")
+            git("reset", "-q", "--", ".atelier")
+            git("commit", "-q", "--no-verify", "-m", f"automatic-goal: preserve blocked attempt {item['id']}")
+        item.update(head=git("rev-parse", "HEAD"), blocker=result["reason"])
+        if item["head"] == item["base"]:
+            item["status"] = "BLOCKED"
+            journal(state)
+            state["active"] = None
+        else:
+            retire(state, "BLOCKED")
+        state.update(phase="FINALIZE" if item["integration"] else "SUPERVISE", reason=result["reason"])
         return
     if result["status"] != "READY":
         raise ValueError("implementation status must be READY or BLOCKED")
@@ -345,12 +388,18 @@ def reviewed(state, result):
         text(result[key], key)
     texts(result["evidence"], "evidence")
     texts(result["findings"], "findings", False)
+    texts(result.get("notes", []), "notes", False)
+    ready = result["ready_percent"]
+    if type(ready) is not int or not 0 <= ready <= 100:
+        raise ValueError("ready_percent must be an integer from 0 to 100")
     verdict = result["verdict"]
     if verdict not in {"ACCEPT", "REVISE", "ABANDON"}:
         raise ValueError("verdict must be ACCEPT, REVISE, or ABANDON")
     checks(result["checks"], passing=verdict == "ACCEPT")
     if verdict == "ACCEPT" and result["findings"]:
-        raise ValueError("required findings must be resolved before ACCEPT")
+        raise ValueError("required findings must be resolved before ACCEPT; small issues go in notes")
+    if verdict == "ACCEPT" and ready < ACCEPT_READY_PERCENT:
+        raise ValueError(f"ACCEPT requires ready_percent of at least {ACCEPT_READY_PERCENT}")
     if verdict == "REVISE":
         texts(result["findings"], "repair findings")
         positive(result["repair_estimate_seconds"], "repair_estimate_seconds")
@@ -367,7 +416,8 @@ def reviewed(state, result):
     elif (item["revisions"] >= state["max_revisions"] or
           time.time() + result["repair_estimate_seconds"] > state["deadline"] - state["handoff_seconds"]):
         retire(state, "DEFERRED")
-        state.update(phase="FINALIZE", reason="Repair budget exhausted; implementation checkpoint preserved.")
+        state.update(phase="FINALIZE" if item["integration"] else "SUPERVISE",
+                     reason="Repair budget exhausted; implementation checkpoint preserved.")
     else:
         item.update(revisions=item["revisions"] + 1, status="REVISING")
         state["phase"] = "IMPLEMENT"
@@ -482,23 +532,26 @@ def route(run_id, deadline, floors, poll):
     state["usage"] = {"at": time.time(), "remaining": values, "floors": floors, "ready": ready}
     if time.time() >= deadline:
         return finish(path, state, "PARTIAL", "Deadline reached during telemetry check.")
-    if not ready:
+    headroom = ready and all(v >= min(100, floor + state["usage_buffer"]) for v, floor in zip(values, floors))
+    item = active(state) if state["active"] is not None else None
+    new_work = (state["phase"] in {"SUPERVISE", "IMPLEMENT"} and not state["request"] and
+                (item is None or (not item["revisions"] and not item["integration"])))
+    # Below a floor, or inside the buffer before new work, wait for the meters to reset; never finish early.
+    if not ready or (new_work and not headroom and time.time() < state["finish_at"]):
         state["events"].append({"kind": "USAGE_PAUSE", "at": time.time()})
         save(path, state)
         time.sleep(min(poll, max(0, deadline - time.time())))
         if time.time() >= deadline:
             return finish(path, state, "PARTIAL", "Deadline reached while usage was unavailable or below a floor.")
         return "USAGE_PAUSED"
-    headroom = all(v >= min(100, floor + state["usage_buffer"]) for v, floor in zip(values, floors))
     if state["phase"] in {"SUPERVISE", "IMPLEMENT"} and not state["request"]:
-        item = active(state) if state["active"] is not None else None
-        new_work = item is None or (not item["revisions"] and not item["integration"])
-        if new_work and (not headroom or time.time() >= state["finish_at"] or
-                         (item and time.time() + item["estimated_seconds"] > state["finish_at"])):
-            if item:
-                item["status"] = "DEFERRED"
-                journal(state)
-                state["active"] = None
+        if new_work and item and (time.time() >= state["finish_at"] or
+                                  time.time() + item["estimated_seconds"] > state["finish_at"]):
+            item["status"] = "DEFERRED"
+            journal(state)
+            state.update(active=None, phase="SUPERVISE",
+                         reason="The selected milestone no longer fits after waiting; choose a smaller one.")
+        if new_work and time.time() >= state["finish_at"]:
             state.update(phase="FINALIZE", reason="Finishing reserve reached; no new features will start.")
         elif item and not new_work:
             estimate = (item["reviews"][-1]["repair_estimate_seconds"]
@@ -510,7 +563,9 @@ def route(run_id, deadline, floors, poll):
                     item["status"] = "DEFERRED"
                     journal(state)
                     state["active"] = None
-                state.update(phase="FINALIZE", reason="Repair no longer fits after waiting; checkpoint preserved.")
+                late = item["integration"] or time.time() >= state["finish_at"]
+                state.update(phase="FINALIZE" if late else "SUPERVISE",
+                             reason="Repair no longer fits after waiting; checkpoint preserved.")
     try:
         expected = active(state).get("head", active(state)["base"]) if state["active"] is not None else state["accepted_head"]
         # A pending implementation request may already have committed work before a protocol retry.

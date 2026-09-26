@@ -26,7 +26,7 @@ let data,selected='',rendered='',lastRun='';
 const el=id=>document.getElementById(id);
 const duration=n=>n<60?`${Math.round(n)} sec`:`${Math.floor(n/3600)?Math.floor(n/3600)+'h ':''}${Math.floor(n/60)%60} min`;
 const date=value=>value?new Date(typeof value==='number'?value*1000:value).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'Date unavailable';
-function list(id,items){el(id).replaceChildren(...items.map(item=>{const li=document.createElement('li');if(typeof item==='string'){li.textContent=item;return li}const title=document.createElement('span'),detail=document.createElement('span');title.className='item-title';detail.className='item-detail';title.textContent=item.title;detail.textContent=item.detail;li.append(title,detail);return li}))}
+function list(id,items){el(id).replaceChildren(...items.map(item=>{const li=document.createElement('li');if(typeof item==='string'){li.textContent=item;return li}const title=document.createElement('span'),detail=document.createElement('span');title.className='item-title';detail.className='item-detail';title.textContent=item.title;detail.textContent=item.detail;li.append(title,detail);for(const line of item.extra||[]){const x=document.createElement('span');x.className='item-detail';x.textContent=line;li.append(x)}return li}))}
 function records(id,items){const opened=new Set([...el(id).querySelectorAll('details[open]')].map(d=>d.dataset.id));el(id).replaceChildren(...items.map(item=>{const d=document.createElement('details');d.className='record';d.dataset.id=item.id;d.open=opened.has(item.id);const s=document.createElement('summary'),p=document.createElement('pre');s.textContent=item.title;p.textContent=item.text;d.append(s,p);return d}))}
 function draw(){
  const run=data.runs.find(r=>r.id===selected)||data.runs[0];
@@ -42,7 +42,7 @@ function draw(){
  el('open-section').hidden=!s.pending.length&&!s.remaining.length;list('pending',s.pending);list('remaining',s.remaining);
  el('before').textContent=s.before||'Starting experience not recorded.';el('after').textContent=s.after||'Final demonstration not recorded.';list('evidence',s.evidence);
  el('explored-section').hidden=!s.abandoned.length;el('explored-label').textContent=`Explored, not kept (${s.abandoned.length})`;list('abandoned',s.abandoned);
- records('reviews',(state?.milestones||[]).map(m=>({id:m.id,title:m.title,text:(m.reviews||[]).map(r=>`${r.verdict}: ${r.reason}\nCorrectness: ${r.correctness}\nValue: ${r.value}\n${r.evidence.join('\n')}\n${r.findings.join('\n')}`).join('\n\n')||'No review recorded.'})));
+ records('reviews',(state?.milestones||[]).map(m=>({id:m.id,title:m.title,text:(m.reviews||[]).map(r=>`${r.verdict}: ${r.reason}\nCorrectness: ${r.correctness}\nValue: ${r.value}\n${r.evidence.join('\n')}\n${r.findings.join('\n')}\n${(r.notes||[]).join('\n')}`).join('\n\n')||'No review recorded.'})));
  const meta={'Branch':s.branch||'Not recorded','Runner':run.status,'Outcome':s.status,'Session':run.name,...run.counts};
  el('metadata').replaceChildren(...Object.entries(meta).flatMap(([key,value])=>{const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=key;dd.textContent=value;return[dt,dd]}));
  el('usage').textContent=run.usage;el('sample').textContent=`Sampled ${date(run.usage_tick_started)}. A saved status is not a process health check.`;

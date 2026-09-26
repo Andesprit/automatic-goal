@@ -7,7 +7,12 @@ Codex observes, prioritizes, supervises and reviews; Claude Code implements and 
 
 An outcome persists across milestones and multiple focused commits. Acceptance of a milestone
 means it contributes useful, reliable behavior; only the final user-path demonstration can
-establish that the complete outcome was achieved. Finishing early is valid.
+establish that the complete outcome was achieved.
+
+A run works like a person given the whole time slot: it keeps going until the time is used and
+never finishes early. It prefers bold ideas; a failed attempt is saved and logged with why it
+failed, and the run moves on. Two filters keep weak work out: the reviewer accepts only reliable
+work, and you pick which accepted milestones to keep after the run.
 
 ## Setup and run
 
@@ -37,7 +42,7 @@ in the foreground before the harness closes the session. Nothing is pushed or de
 |---|---|---|
 | `goal` | required | User outcome sought |
 | `hours` | required | Wall-clock hours, decimals allowed, positive and at most 720 |
-| `finish_reserve_percent` | 20 | Last 5–50% of time reserved for integration, repairs and demonstration |
+| `finish_reserve_percent` | 10 | Last 5–50% of time reserved for integration, repairs and demonstration |
 | `max_revisions` | 2 | 0–5 review repair rounds per milestone; also bounds integration repair milestones |
 | `usage_reserve_percent` | 5 | 0–25 extra percentage points above each usage floor required to start features |
 | `min_claude_fable_remaining` | 50 | Claude model-specific Fable weekly remaining floor |
@@ -45,15 +50,18 @@ in the foreground before the harness closes the session. Nothing is pushed or de
 | `min_codex_remaining` | 30 | Codex weekly remaining floor |
 | `usage_poll_seconds` | 300 | Seconds between usage checks while paused, 1–3600 |
 
-Choose the finishing reserve for the project's risk and run length. The supervisor can finish
-sooner but cannot silently lower your reserve or usage floors. Planning time counts against
+Choose the finishing reserve for the project's risk and run length. The supervisor cannot
+finish early or lower your reserve or usage floors: the final demonstration starts only when
+the reserve arrives. A milestone too big for the time left is refused and the supervisor picks
+a smaller one. Planning time counts against
 the same deadline. A milestone estimate includes implementation and review and must fit before
 the finishing reserve. A repair must leave a final handoff allowance (5% of the run, capped at
 five minutes). These estimates are planning constraints, not guarantees of agent speed.
 
 Usage is checked before every stage. New feature work requires the configured extra headroom;
 reviews, repairs and demonstrations may use that buffer, while still respecting the original
-floors. Unknown telemetry pauses. The wall clock continues during pauses. At the deadline the
+floors. Below a floor, or inside the buffer before new work, the run waits for the meters to
+reset instead of ending. Unknown telemetry pauses. The wall clock continues during pauses. At the deadline the
 runner writes an honest partial handoff without launching another agent. Already-started agent
 turns have a **soft deadline**: they may complete their bounded turn before the next check.
 Codex stages have an 1800-second cap, implementation 3600; a transport failure has one retry,
@@ -68,14 +76,18 @@ flow ID and output log. Installation does not start a run. The conduits do not s
 1. **Observe and compare.** Codex inspects the actual user experience, records reproducible
    baseline steps, failures or measurements, states assumptions, and defines success and
    preserved behavior. It normally compares three to five opportunities (at least two credible
-   alternatives), by user benefit, evidence, effort and uncertainty. It selects a primary and
-   fallback and explains why the primary deserves the time. Competitor research resolves a
-   named uncertainty when useful; it is not a mandatory ritual or support for a preselected idea.
+   alternatives), ranked by upside: how much better the experience gets if the idea works.
+   Uncertainty is a reason to try, not to skip. It selects a primary and fallback and explains
+   why the primary deserves the time. Research into competitors and the best products in the
+   space is used when it sharpens an idea or reveals a bolder one.
 2. **Maintain the outcome.** The brief, priority and milestones persist across stage sessions.
    Codex consults shared accepted, abandoned and unfinished history, checking which changes
    actually exist on the branch. A changed brief requires an explicit evidence-backed replan;
-   the earlier brief remains in the event log. The opportunity list is not regenerated on every
-   pass. At checkpoints Codex chooses to build, simplify, switch, finish, or report a blocker.
+   the earlier brief remains in the event log. New ideas can be added at every checkpoint; when
+   the brief's criteria are met or only polish is left, Codex raises the bar with bolder ones.
+   Parts of the goal nobody has tried come before polish. At checkpoints Codex chooses to build,
+   simplify or switch. Each milestone states its ambition (bold, normal or polish), its upside,
+   why it might fail, and which accepted milestones it builds on.
 3. **Build a coherent milestone.** Claude implements across as many files and focused commits
    as the milestone needs. The scope is the smallest independently useful experience that
    advances the outcome, with specific acceptance checks. Small fixes are appropriate when
@@ -85,11 +97,15 @@ flow ID and output log. Installation does not start a run. The conduits do not s
    independently checks its user benefit and reliability. Checks match risk and scope; broader
    validation happens at integration points. Commands, results and elapsed time are recorded.
    Assertion counts and commit counts are not success metrics.
-5. **Repair worthwhile work.** ACCEPT retains the milestone; REVISE sends concrete findings
-   and completion criteria back to Claude on the same milestone; ABANDON records weak value,
-   a disproven hypothesis or unjustified repair cost. Repair has both a count and time budget.
-   Exhaustion becomes DEFERRED, separately from a judgment that the idea was bad. Before rolling
-   back an abandoned/deferred implementation, its commits are preserved under
+5. **Repair worthwhile work.** The reviewer scores how much of the change is ready as is.
+   ACCEPT retains the milestone and needs at least 70% ready; small issues become notes for you
+   to review after the run. REVISE sends concrete blocking findings and completion criteria back
+   to Claude on the same milestone; ABANDON records weak value, a disproven hypothesis or
+   unjustified repair cost, with what was learned. If Claude finds the idea unworkable it returns
+   BLOCKED with what it tried and saw. Repair has both a count and time budget. Exhaustion
+   becomes DEFERRED, separately from a judgment that the idea was bad. None of these end the
+   run: the supervisor chooses the next idea. Before rolling back an abandoned, deferred or
+   blocked implementation, its commits and any uncommitted attempt are preserved under
    `refs/automatic-goal/<run-id>/<milestone-id>`. Only that milestone is reset; earlier accepted
    work stays. Dirty or unexpected Git state is preserved for inspection, never cleaned blindly.
 6. **Demonstrate the whole experience.** Codex revisits the original baseline on the accepted
@@ -98,6 +114,9 @@ flow ID and output log. Installation does not start a run. The conduits do not s
    Narrow integration repairs can use the finishing reserve, with their own bounded count.
    ACHIEVED requires evidence for every success criterion. PARTIAL and BLOCKED state what remains
    unproven. Neither a passing test suite nor exhausted time implies achievement or adoption.
+7. **You pick.** Accepted milestones stack on the goal branch. The report lists each one with
+   the reviewer's notes, what it builds on, and a `git cherry-pick <base>..<head>` command to
+   take only that milestone. Failed and deferred ideas list their saved ref and why.
 
 ## Durable state and recovery
 
@@ -132,8 +151,9 @@ Back them up separately. Raw flow logs remain under their originating worktree's
 Final chat formatting is not a control protocol. A valid stage JSON result is accepted regardless
 of the final message. Missing, stale or malformed JSON gets **two bounded recovery attempts**
 with the same request ID and actual Git state, so a committed implementation is not repeated.
-Exhaustion is OPERATIONAL_FAILURE, not ABANDON. A genuine implementation blocker becomes BLOCKED
-and preserves unfinished code. Unexpected branch, HEAD or tracked-file changes also preserve work.
+Exhaustion is OPERATIONAL_FAILURE, not ABANDON. An implementation blocker marks only that
+milestone BLOCKED, saves its code under a ref and returns to the supervisor. Unexpected branch,
+HEAD or tracked-file changes stop the run and preserve work.
 The human-readable handoff exists even when transport failure prevents a final agent response.
 
 Inspect before resuming an interrupted flow:
@@ -231,7 +251,7 @@ readable, but accepted-count comparisons across versions do not measure outcome 
 
 Tests use throwaway Git repositories, local HTTP fixtures, and scripted ACP agents; they do not
 call real models or account endpoints. Native tests exercise the actual Atelier runner through
-multiple commits, review/repair, protocol recovery without markers, and an early final handoff.
+multiple commits, review/repair, protocol recovery without markers, and the final handoff.
 Other checks cover Git guards, time/usage reserves, bounded repair, incomplete handoffs, shared
 history, legacy reports, and telemetry parsing. No test asserts that a model's value judgment
 is correct; real-run evaluation still needs the demonstrated outcome and human judgment.
