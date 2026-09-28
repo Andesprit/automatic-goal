@@ -206,7 +206,9 @@ the percentages and the verdict; tokens, bodies and error messages are never pri
   The clock is read after each response, so a window that reset during a slow read is treated as
   stale and pauses. This endpoint is what the
   installed CLI uses, not a stable public API: a schema or auth change pauses the loop until the
-  script is updated. The local `rate-limit-cache.json` is not used (stale, no Fable meter).
+  script is updated. An expired saved login (http 401) is renewed once by asking Claude Code
+  for a one-word reply on haiku, then read again; `CLAUDE_CODE_OAUTH_TOKEN` is never refreshed.
+  The local `rate-limit-cache.json` is not used (stale, no Fable meter).
 - Codex: a private `codex app-server --listen stdio://` process answers
   `account/rateLimits/read` through the existing login (no thread or turn is started, the process
   is stopped afterwards). See <https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt>.
