@@ -19,7 +19,10 @@ the Keychain item "Claude Code-credentials" and, only when that item is absent,
 custom CLAUDE_CONFIG_DIR only that directory's file is read, never the default Keychain item of
 a possibly different account. Redirects are refused so the token is never forwarded. The
 endpoint is what the installed Claude CLI uses, not a stable public API: a schema or auth change
-pauses the loop until this file is updated. The Fable meter is the `limits` entry scoped to the
+pauses the loop until this file is updated. A saved login token expires after hours, and only
+Claude Code renews it; this check runs before the Claude stages that would, so on http 401 it
+asks Claude Code for one tiny reply (which refreshes the saved token) and retries once. A token
+from CLAUDE_CODE_OAUTH_TOKEN is never refreshed. The Fable meter is the `limits` entry scoped to the
 model with display_name "Fable" (the model-specific weekly limit,
 https://support.claude.com/en/articles/15424964-claude-fable-models-on-your-plan); the all-model
 seven_day total is deliberately never used. five_hour.utilization is the 5-hour meter.
@@ -37,6 +40,7 @@ import os
 import queue
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -46,10 +50,13 @@ from pathlib import Path
 
 CLAUDE_URL = "https://api.anthropic.com/api/oauth/usage"
 KEYCHAIN_CMD = ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"]
+REFRESH_CMD = ["claude", "-p", "reply ok", "--model", "haiku"]
 CODEX_CMD = ["codex", "app-server", "--listen", "stdio://"]
 MAC = sys.platform == "darwin"
-# With the keychain read, RPC budget and cleanup, one check takes about 30 seconds at most.
+# With the keychain read, RPC budget and cleanup, one check takes about 30 seconds at most,
+# plus REFRESH_TIMEOUT when an expired Claude login is renewed.
 HTTP_TIMEOUT = 10
+REFRESH_TIMEOUT = 90
 RPC_TIMEOUT = 10
 WEEK_MINS = 10080
 METERS = ("claude fable weekly", "claude 5h", "codex weekly")
@@ -124,7 +131,24 @@ def claude_token():
     return token
 
 
-def claude_fetch():
+def refresh_claude_login():
+    """Let Claude Code renew and store its expired login; True when the reply succeeded."""
+    try:
+        return (
+            subprocess.run(
+                REFRESH_CMD,
+                cwd=tempfile.gettempdir(),  # no project settings or instructions
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=REFRESH_TIMEOUT,
+            ).returncode
+            == 0
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def claude_fetch(refresh=True):
     headers = {
         "Authorization": "Bearer " + claude_token(),
         "anthropic-beta": "oauth-2025-04-20",
@@ -137,6 +161,13 @@ def claude_fetch():
         ) as response:
             return json.loads(response.read())
     except urllib.error.HTTPError as error:
+        if (
+            error.code == 401
+            and refresh
+            and not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+            and refresh_claude_login()
+        ):
+            return claude_fetch(refresh=False)
         raise Unavailable(f"http {error.code}") from None
     except urllib.error.URLError:
         raise Unavailable("network error") from None

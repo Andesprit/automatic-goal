@@ -317,6 +317,55 @@ class ClaudeHttp(unittest.TestCase):
         )
         self.assertEqual(out.splitlines()[-1], "USAGE_PAUSE")
 
+    def test_expired_saved_login_is_refreshed_once_and_retried(self):
+        os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN")
+        replies = iter([(401, b""), (200, json.dumps(CLAUDE).encode())])
+
+        def next_reply():
+            status, body = next(replies)
+            self.server.script["/usage"] = (status, body, {})
+
+        next_reply()
+        refresh = mock.Mock(side_effect=lambda: next_reply() or True)
+        with (
+            mock.patch.object(usage, "claude_token", lambda: TOKEN),
+            mock.patch.object(usage, "refresh_claude_login", refresh),
+        ):
+            self.assertEqual(usage.claude_fetch(), CLAUDE)
+        refresh.assert_called_once_with()
+        self.assertEqual(len(self.server.requests), 2)
+
+    def test_refresh_that_does_not_help_pauses_after_one_retry(self):
+        os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN")
+        self.server.script["/usage"] = (401, b"", {})
+        refresh = mock.Mock(return_value=True)
+        with (
+            mock.patch.object(usage, "claude_token", lambda: TOKEN),
+            mock.patch.object(usage, "refresh_claude_login", refresh),
+            self.assertRaisesRegex(usage.Unavailable, "^http 401$"),
+        ):
+            usage.claude_fetch()
+        refresh.assert_called_once_with()
+        self.assertEqual(len(self.server.requests), 2)
+
+    def test_env_token_is_never_refreshed(self):
+        self.server.script["/usage"] = (401, b"", {})
+        refresh = mock.Mock(return_value=True)
+        with (
+            mock.patch.object(usage, "refresh_claude_login", refresh),
+            self.assertRaisesRegex(usage.Unavailable, "^http 401$"),
+        ):
+            usage.claude_fetch()
+        refresh.assert_not_called()
+
+    def test_refresh_reports_failure_without_raising(self):
+        with mock.patch.object(usage, "REFRESH_CMD", ["false"]):
+            self.assertFalse(usage.refresh_claude_login())
+        with mock.patch.object(usage, "REFRESH_CMD", ["/no/such/claude"]):
+            self.assertFalse(usage.refresh_claude_login())
+        with mock.patch.object(usage, "REFRESH_CMD", ["true"]):
+            self.assertTrue(usage.refresh_claude_login())
+
     def test_redirects_are_refused(self):
         self.server.script["/usage"] = (
             302,
