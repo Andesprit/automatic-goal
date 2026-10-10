@@ -20,6 +20,11 @@ inputs:
     description: Seconds to wait before rechecking usage while paused (1-3600). Trusted operator input,
       interpolated into shell.
     default: '300'
+  claude_weekly_model:
+    description: Display name of the Claude model whose weekly meter min_claude_fable_remaining applies
+      to (for example Fable or Opus), or all for the all-model weekly total. Trusted operator input,
+      interpolated into shell.
+    default: Fable
   run_id:
     description: Internal run ID from goal_loop; auto creates a standalone checkpoint. Trusted generated
       identifier.
@@ -30,7 +35,7 @@ tasks:
       handoff
     task: 'python3 "{{conduit_dir}}/scripts/run.py" route ''{{inputs.run_id}}'' ''{{inputs.deadline}}''
       ''{{inputs.min_claude_fable_remaining}}'' ''{{inputs.min_claude_5h_remaining}}'' ''{{inputs.min_codex_remaining}}''
-      ''{{inputs.usage_poll_seconds}}'' '
+      ''{{inputs.usage_poll_seconds}}'' ''{{inputs.claude_weekly_model}}'' '
     tool: tool:bash
     depends_on: []
     timeout: 3800
@@ -83,7 +88,15 @@ tasks:
       persistent outcome, milestone history, remaining time, usage sample, and current request ID.
       Read {{conduit_dir}}/stage-results.md for the exact result schema. Write the complete
       JSON result to .atelier/goal/result.json with this request_id. This file, not final-message
-      formatting, controls the workflow. Finish with a concise summary; no completion marker is needed.
+      formatting, controls the workflow. Before you finish, run
+      `python3 "{{conduit_dir}}/scripts/run.py" check` from the worktree root and repair result.json
+      until it prints OK: a result that fails this check costs a whole extra stage. Finish with a
+      concise summary; no completion marker is needed.
+
+      Read the "What we know" section of .atelier/implementations/index.md before you explore, and
+      rely on it. When you learn something a later agent would otherwise rediscover (a fact about
+      the code or its tools, a pitfall, a decision), add it to `learned` in your result: at most
+      five notes, and only what that section does not already say.
 
       If request.json contains a recovery error, inspect actual Git state and your existing result.
       Repair that result or finish the same stage. Never repeat committed work or silently choose
@@ -120,6 +133,10 @@ tasks:
       the complete milestone is reviewed as a range from its recorded base. Do not amend, rewrite,
       or merge history. On a repair, read the most recent review's concrete findings and resolve
       them on top of the existing commits; do not restart the work or substitute a new feature.
+      A repair is a small job: start from the milestone diff (base..HEAD), the findings and the
+      checks already recorded in state.json instead of exploring the project again, and rerun only
+      the checks the repair can affect plus the milestone's acceptance checks. Repair the
+      findings only; the reviewer's notes are approved as they are and wait for the human.
 
       First inspect HEAD, branch and working tree. A recovery request can already have the completed
       commits: verify them and repair result.json rather than committing twice. During normal
@@ -143,7 +160,15 @@ tasks:
       persistent outcome, milestone history, remaining time, usage sample, and current request ID.
       Read {{conduit_dir}}/stage-results.md for the exact result schema. Write the complete
       JSON result to .atelier/goal/result.json with this request_id. This file, not final-message
-      formatting, controls the workflow. Finish with a concise summary; no completion marker is needed.
+      formatting, controls the workflow. Before you finish, run
+      `python3 "{{conduit_dir}}/scripts/run.py" check` from the worktree root and repair result.json
+      until it prints OK: a result that fails this check costs a whole extra stage. Finish with a
+      concise summary; no completion marker is needed.
+
+      Read the "What we know" section of .atelier/implementations/index.md before you explore, and
+      rely on it. When you learn something a later agent would otherwise rediscover (a fact about
+      the code or its tools, a pitfall, a decision), add it to `learned` in your result: at most
+      five notes, and only what that section does not already say.
 
       If request.json contains a recovery error, inspect actual Git state and your existing result.
       Repair that result or finish the same stage. Never repeat committed work or silently choose
@@ -182,15 +207,26 @@ tasks:
       Inspect the actual user path. Choose checks proportional to risk; rerun relevant checks
       independently, and broaden only when scope, failures or uncertainty justify it. Record exact
       commands, exit codes, summaries and elapsed seconds. Test counts alone do not prove value.
+      When the milestone already has reviews, judge the repair: inspect the diff since the last
+      reviewed head, confirm each earlier finding against its completion criterion, and rerun the
+      acceptance checks and the checks the repair touches. Reuse your earlier evidence for code
+      the repair did not change.
 
       Score ready_percent: the share of the change you would keep exactly as it is (0-100).
-      ACCEPT: demonstrated contribution, reliable, and at least 70 percent ready. Small issues
-      (cosmetic details, minor edge cases, follow-up polish) do not block: list them in notes, and
-      a human reviews them after the run. Required findings must be empty.
-      REVISE: worthwhile approach with blocking problems (broken or regressed behavior, failing
-      checks, accessibility failures, data risk) or less than 70 percent ready. Give concrete
-      required findings and their completion criteria, estimate remaining repair plus re-review
-      time, and explain why its expected benefit still justifies that cost. Ignore sunk cost.
+      ACCEPT: demonstrated contribution, reliable, at least 70 percent ready, and no critical
+      or high finding. Medium and low issues do not block: list them in notes, and a human reviews
+      them after the run. Required findings must be empty.
+      REVISE: worthwhile approach with at least one critical or high finding. Rate every issue:
+      critical (data loss, a security hole, or the milestone's main path does not work at all),
+      high (an acceptance criterion fails, behavior the brief says to preserve broke, a required
+      check fails, or someone cannot complete the main path), medium (a real defect that leaves
+      the acceptance criteria working, such as an edge case or a rough message), low (polish).
+      Only critical and high issues are findings, each starting with "critical: " or "high: ".
+      Medium and low issues are approved as they are: put them in notes, labelled, and do not ask
+      for their repair, because a repair round costs far more than such a fix. Less than 70
+      percent ready means something is high: name it. Give concrete required findings and their
+      completion criteria, estimate remaining repair plus re-review time, and explain why its
+      expected benefit still justifies that cost. Ignore sunk cost.
       ABANDON: weak value, disproven hypothesis, or unjustified repair cost. Explain what was tried,
       what you observed, why it failed and what the next attempt should learn. Judge the work, not
       its ambition: a bold idea that works deserves ACCEPT; one that fails is a useful record.
@@ -206,7 +242,15 @@ tasks:
       persistent outcome, milestone history, remaining time, usage sample, and current request ID.
       Read {{conduit_dir}}/stage-results.md for the exact result schema. Write the complete
       JSON result to .atelier/goal/result.json with this request_id. This file, not final-message
-      formatting, controls the workflow. Finish with a concise summary; no completion marker is needed.
+      formatting, controls the workflow. Before you finish, run
+      `python3 "{{conduit_dir}}/scripts/run.py" check` from the worktree root and repair result.json
+      until it prints OK: a result that fails this check costs a whole extra stage. Finish with a
+      concise summary; no completion marker is needed.
+
+      Read the "What we know" section of .atelier/implementations/index.md before you explore, and
+      rely on it. When you learn something a later agent would otherwise rediscover (a fact about
+      the code or its tools, a pitfall, a decision), add it to `learned` in your result: at most
+      five notes, and only what that section does not already say.
 
       If request.json contains a recovery error, inspect actual Git state and your existing result.
       Repair that result or finish the same stage. Never repeat committed work or silently choose
@@ -246,7 +290,8 @@ tasks:
       improvements that were never measured. If initial planning was cut short, report PARTIAL.
 
       ACHIEVED requires evidence for every success criterion. PARTIAL and BLOCKED must explain what
-      is unproven or unfinished. If integrated testing reveals a fixable problem worth repairing,
+      is unproven or unfinished. If integrated testing reveals a fixable critical or high problem
+      (the reviewer's scale; list anything lower under limitations),
       return REVISE with a narrowly scoped integration milestone and its repair/review time estimate;
       the controller checks the remaining reserve and a bounded number of integration repairs.
       Do not start new features during this phase. Tests may run, but do not change code or Git state.
@@ -259,7 +304,15 @@ tasks:
       persistent outcome, milestone history, remaining time, usage sample, and current request ID.
       Read {{conduit_dir}}/stage-results.md for the exact result schema. Write the complete
       JSON result to .atelier/goal/result.json with this request_id. This file, not final-message
-      formatting, controls the workflow. Finish with a concise summary; no completion marker is needed.
+      formatting, controls the workflow. Before you finish, run
+      `python3 "{{conduit_dir}}/scripts/run.py" check` from the worktree root and repair result.json
+      until it prints OK: a result that fails this check costs a whole extra stage. Finish with a
+      concise summary; no completion marker is needed.
+
+      Read the "What we know" section of .atelier/implementations/index.md before you explore, and
+      rely on it. When you learn something a later agent would otherwise rediscover (a fact about
+      the code or its tools, a pitfall, a decision), add it to `learned` in your result: at most
+      five notes, and only what that section does not already say.
 
       If request.json contains a recovery error, inspect actual Git state and your existing result.
       Repair that result or finish the same stage. Never repeat committed work or silently choose

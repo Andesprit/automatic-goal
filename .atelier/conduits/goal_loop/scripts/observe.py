@@ -20,7 +20,7 @@ _spec.loader.exec_module(session_report)
 
 def read(path, warnings):
     try:
-        value = yaml.safe_load(path.read_text())
+        value = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(value, dict):
             raise ValueError("expected a mapping")
         return value
@@ -51,7 +51,7 @@ def decision(project, identifier, modern):
         root / f"{identifier}.md"])
     for path in candidates:
         try:
-            return path.read_text(errors="replace")
+            return path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             pass
     return ""
@@ -69,7 +69,7 @@ def run_snapshot(path, project):
         record = project / ".atelier/implementations/runs" / run_id
         outcome = read(record / "state.json", warnings) or None
         try:
-            handoff = (record / "handoff.md").read_text()
+            handoff = (record / "handoff.md").read_text(encoding="utf-8")
         except OSError:
             warnings.append("Outcome handoff unavailable")
     ticks = []

@@ -20,6 +20,18 @@ TERMINAL = {"ACHIEVED", "PARTIAL", "BLOCKED", "OPERATIONAL_FAILURE"}
 AMBITIONS = {"bold", "normal", "polish"}
 # A reviewer may accept with small notes only when at least this share of the change is ready as is.
 ACCEPT_READY_PERCENT = 70
+# Set by `check`: validate a result without changing state, history or Git.
+DRY = False
+
+
+class Checked(Exception):
+    """A dry check reached the first change to history or Git, so the result is valid."""
+
+
+def effect():
+    """Everything after this call changes history or Git; a dry check stops here."""
+    if DRY:
+        raise Checked
 
 
 def git(*args):
@@ -29,7 +41,7 @@ def git(*args):
 def atomic(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(dir=path.parent, prefix=".write-")
-    with os.fdopen(fd, "w") as out:
+    with os.fdopen(fd, "w", encoding="utf-8") as out:
         out.write(value)
     os.replace(name, path)
 
@@ -39,7 +51,8 @@ def write_json(path, value):
 
 
 def read_json(path):
-    value = json.loads(path.read_text())
+    # From bytes, json detects the encoding and skips the byte-order mark PowerShell writes.
+    value = json.loads(path.read_bytes())
     if not isinstance(value, dict):
         raise ValueError(f"{path.name} must contain an object")
     return value
@@ -51,7 +64,8 @@ def dirty():
 
 
 def guard(clean=False):
-    if os.environ.get("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS") != "1":
+    # An agent's own shell may not carry the variable, and a dry check starts no agent.
+    if not DRY and os.environ.get("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS") != "1":
         raise RuntimeError("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS must be exactly 1")
     cwd = Path.cwd().resolve()
     if Path(git("rev-parse", "--show-toplevel")).resolve() != cwd:
@@ -73,7 +87,7 @@ def guard(clean=False):
 
 def location():
     path = Path(".atelier/goal")
-    if not path.is_symlink():
+    if not memory.is_link(path):
         raise RuntimeError("no goal checkpoint; initialize a run first")
     state = read_json(path / "state.json")
     if state["worktree"] != str(Path.cwd().resolve()):
@@ -143,7 +157,7 @@ def initialize(deadline, reserve=10, revisions=2, buffer=5):
     if not 5 <= reserve <= 50 or not 0 <= revisions <= 5 or not 0 <= buffer <= 25:
         raise ValueError("reserve must be 5–50, max_revisions 0–5, usage buffer 0–25")
     local = Path(".atelier/goal")
-    if local.exists() or local.is_symlink():
+    if local.exists() or memory.is_link(local):
         _, old = location()
         if old["status"] not in TERMINAL:
             raise RuntimeError("unfinished goal exists; resume that flow or inspect its checkpoint first")
@@ -152,7 +166,7 @@ def initialize(deadline, reserve=10, revisions=2, buffer=5):
     identifier = uuid.uuid4().hex
     path = root / "runs" / identifier
     path.mkdir(parents=True)
-    local.symlink_to(path, target_is_directory=True)
+    memory.link(local, path)
     state = {"version": 2, "id": identifier, "worktree": str(Path.cwd().resolve()),
              "branch": branch, "initial_base": git("rev-parse", "HEAD"),
              "accepted_head": git("rev-parse", "HEAD"), "started": now,
@@ -200,6 +214,7 @@ def active(state):
 
 
 def journal(state):
+    effect()
     if state["active"] is None:
         return
     item = active(state)
@@ -220,6 +235,7 @@ def journal(state):
 
 def retire(state, status):
     """Preserve rejected/deferred/blocked commits under a ref before rolling back this milestone."""
+    effect()
     item = active(state)
     check_git(state, expected=item["head"])
     ref = f"refs/automatic-goal/{state['id']}/{item['id']}"
@@ -307,7 +323,10 @@ def start_milestone(state, proposal, integration=False):
             # Too big is not a reason to stop: ask the supervisor for something that fits.
             state["reason"] = (f"Proposed milestone needs {proposal['estimated_seconds']}s but only "
                                f"{max(0, int(limit - time.time()))}s of feature time remain; choose a smaller one.")
+        if DRY:
+            raise ValueError(state["reason"])
         return
+    effect()
     item = {**proposal, "id": memory.reserve(Path(".atelier/implementations")),
             "base": state["accepted_head"], "status": "BUILDING", "revisions": 0,
             "reviews": [], "integration": integration}
@@ -352,6 +371,7 @@ def implemented(state, result):
         item = active(state)
         check_git(state, clean=False)
         git("merge-base", "--is-ancestor", item["base"], "HEAD")
+        effect()
         if dirty():
             # An exclude pathspec fails when .atelier is ignored, so stage all and unstage .atelier.
             git("add", "-A")
@@ -388,6 +408,10 @@ def reviewed(state, result):
         text(result[key], key)
     texts(result["evidence"], "evidence")
     texts(result["findings"], "findings", False)
+    # Only critical and high findings are worth a repair round; anything below is approved as it is.
+    if not all(re.match(r"(critical|high): \S", finding) for finding in result["findings"]):
+        raise ValueError('each finding must start with "critical: " or "high: "; '
+                         "medium and low issues are approved as they are and go in notes")
     texts(result.get("notes", []), "notes", False)
     ready = result["ready_percent"]
     if type(ready) is not int or not 0 <= ready <= 100:
@@ -459,6 +483,56 @@ def finalized(state, result):
         state.update(status=status, reason=result["reason"], finished=time.time())
 
 
+def learned(result):
+    """Optional notes for later agents, so nobody rediscovers the same thing."""
+    items = result.get("learned", [])
+    if not isinstance(items, list) or len(items) > 5:
+        raise ValueError("learned must be a list of at most 5 notes")
+    for item in items:
+        if item["kind"] not in memory.NOTE_KINDS:
+            raise ValueError("learned kind must be fact, pitfall, or decision")
+        text(item["note"], "learned note")
+        text(item["evidence"], "learned evidence")
+    return [{key: item[key] for key in ("kind", "note", "evidence")} for item in items]
+
+
+def transition(path, state):
+    """Read result.json and apply it to a copy, so a malformed result cannot partly change canonical state."""
+    request = state["request"]
+    stage = request["stage"]
+    check_git(state, clean=stage != "IMPLEMENT", expected=request["head"] if stage != "IMPLEMENT" else None)
+    result = read_json(path / "result.json")
+    if result["request_id"] != request["id"]:
+        raise ValueError("stale result: request_id does not match request.json")
+    learned(result)
+    candidate = json.loads(json.dumps(state))
+    {"SUPERVISE": supervise, "IMPLEMENT": implemented,
+     "REVIEW": reviewed, "FINALIZE": finalized}[stage](candidate, result)
+    return candidate, result
+
+
+def check_result():
+    """Let an agent validate its result before ending its turn; nothing is changed."""
+    global DRY
+    path, state = location()
+    if not state["request"] or state["status"] in TERMINAL:
+        raise ValueError("no stage is waiting for a result")
+    DRY = True
+    try:
+        transition(path, state)
+    except Checked:
+        pass
+    return f"OK: result.json is valid for this {state['request']['stage']} request"
+
+
+def stop(reason):
+    """Close a run early at the operator's request; all work, including an unfinished milestone, is kept."""
+    path, state = location()
+    if state["status"] in TERMINAL:
+        return "GOAL_DONE"
+    return finish(path, state, "PARTIAL", f"Stopped by the operator: {reason}")
+
+
 def apply_result():
     path, state = location()
     request = state["request"]
@@ -467,16 +541,9 @@ def apply_result():
         # Replaying that completed apply must not create another milestone or commit.
         return "GOAL_DONE" if state["status"] in TERMINAL else "CONTINUE"
     stage = request["stage"]
+    milestone = active(state)["id"] if state["active"] is not None else None
     try:
-        check_git(state, clean=stage != "IMPLEMENT", expected=request["head"] if stage != "IMPLEMENT" else None)
-        result = read_json(path / "result.json")
-        if result["request_id"] != request["id"]:
-            raise ValueError("stale result: request_id does not match request.json")
-        # Validate and transition a copy so a malformed result cannot partly change canonical state.
-        candidate = json.loads(json.dumps(state))
-        {"SUPERVISE": supervise, "IMPLEMENT": implemented,
-         "REVIEW": reviewed, "FINALIZE": finalized}[stage](candidate, result)
-        state = candidate
+        state, result = transition(path, state)
     except (ValueError, KeyError, TypeError, OSError) as error:
         state["protocol_failures"] += 1
         state["reason"] = f"Invalid {stage} result ({type(error).__name__}): {error}"
@@ -492,12 +559,16 @@ def apply_result():
     state["events"].append({"stage": stage, "kind": "RESULT", "at": time.time(),
                             "duration_seconds": time.time() - request["started"], "result": result})
     state.update(request=None, protocol_failures=0)
+    if result.get("learned"):
+        root = Path(".atelier/implementations")
+        memory.learn(root, learned(result), {"run": state["id"], "stage": stage, "milestone": milestone})
+        memory.index(root)
     journal(state)
     save(path, state)
     return "GOAL_DONE" if state["status"] in TERMINAL else "CONTINUE"
 
 
-def route(run_id, deadline, floors, poll):
+def route(run_id, deadline, floors, poll, weekly="Fable"):
     if not Path(".atelier/goal").exists() and run_id == "auto":
         initialize(deadline)
     path, state = location()
@@ -514,7 +585,7 @@ def route(run_id, deadline, floors, poll):
     usage_file = path / "usage.json"
     usage_file.unlink(missing_ok=True)
     try:
-        proc = subprocess.run([sys.executable, str(Path(__file__).with_name("usage.py")), *map(str, floors)],
+        proc = subprocess.run([sys.executable, str(Path(__file__).with_name("usage.py")), *map(str, floors), weekly],
                               env=env, capture_output=True, text=True, timeout=120)
         state["usage_text"] = proc.stdout.strip() or "Usage unavailable: reader produced no summary."
         reader_ok = proc.returncode == 0
@@ -598,7 +669,10 @@ def main():
     gate.add_argument("deadline", type=int)
     gate.add_argument("floors", type=int, nargs=3)
     gate.add_argument("poll", type=int)
+    gate.add_argument("weekly", nargs="?", default="Fable")
     sub.add_parser("apply")
+    sub.add_parser("check")
+    sub.add_parser("stop").add_argument("reason")
     args = parser.parse_args()
     try:
         if args.command == "init":
@@ -608,7 +682,18 @@ def main():
                 raise ValueError("floors must be 1–100 and poll 1–3600")
             if not re.fullmatch(r"auto|[a-f0-9]{32}", args.run_id):
                 raise ValueError("invalid run ID")
-            result = route(args.run_id, args.deadline, args.floors, args.poll)
+            if not re.fullmatch(r"[A-Za-z0-9 ._-]{1,40}", args.weekly):
+                raise ValueError("invalid Claude weekly meter name")
+            result = route(args.run_id, args.deadline, args.floors, args.poll, args.weekly)
+        elif args.command == "check":
+            try:
+                result = check_result()
+            except (ValueError, KeyError, TypeError, OSError, RuntimeError, subprocess.CalledProcessError) as error:
+                detail = f"missing field {error}" if isinstance(error, KeyError) else error
+                print(f"INVALID ({type(error).__name__}): {detail}")
+                return 1
+        elif args.command == "stop":
+            result = stop(args.reason)
         else:
             result = apply_result()
         print(result, end="")

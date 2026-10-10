@@ -317,6 +317,55 @@ class ClaudeHttp(unittest.TestCase):
         )
         self.assertEqual(out.splitlines()[-1], "USAGE_PAUSE")
 
+    def test_expired_saved_login_is_refreshed_once_and_retried(self):
+        os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN")
+        replies = iter([(401, b""), (200, json.dumps(CLAUDE).encode())])
+
+        def next_reply():
+            status, body = next(replies)
+            self.server.script["/usage"] = (status, body, {})
+
+        next_reply()
+        refresh = mock.Mock(side_effect=lambda: next_reply() or True)
+        with (
+            mock.patch.object(usage, "claude_token", lambda: TOKEN),
+            mock.patch.object(usage, "refresh_claude_login", refresh),
+        ):
+            self.assertEqual(usage.claude_fetch(), CLAUDE)
+        refresh.assert_called_once_with()
+        self.assertEqual(len(self.server.requests), 2)
+
+    def test_refresh_that_does_not_help_pauses_after_one_retry(self):
+        os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN")
+        self.server.script["/usage"] = (401, b"", {})
+        refresh = mock.Mock(return_value=True)
+        with (
+            mock.patch.object(usage, "claude_token", lambda: TOKEN),
+            mock.patch.object(usage, "refresh_claude_login", refresh),
+            self.assertRaisesRegex(usage.Unavailable, "^http 401$"),
+        ):
+            usage.claude_fetch()
+        refresh.assert_called_once_with()
+        self.assertEqual(len(self.server.requests), 2)
+
+    def test_env_token_is_never_refreshed(self):
+        self.server.script["/usage"] = (401, b"", {})
+        refresh = mock.Mock(return_value=True)
+        with (
+            mock.patch.object(usage, "refresh_claude_login", refresh),
+            self.assertRaisesRegex(usage.Unavailable, "^http 401$"),
+        ):
+            usage.claude_fetch()
+        refresh.assert_not_called()
+
+    def test_refresh_reports_failure_without_raising(self):
+        with mock.patch.object(usage, "REFRESH_CMD", ["false"]):
+            self.assertFalse(usage.refresh_claude_login())
+        with mock.patch.object(usage, "REFRESH_CMD", ["/no/such/claude"]):
+            self.assertFalse(usage.refresh_claude_login())
+        with mock.patch.object(usage, "REFRESH_CMD", ["true"]):
+            self.assertTrue(usage.refresh_claude_login())
+
     def test_redirects_are_refused(self):
         self.server.script["/usage"] = (
             302,
@@ -666,7 +715,31 @@ class Main(unittest.TestCase):
 
     def test_wrong_argument_count_is_an_error(self):
         self.assertIn("usage:", usage.main(["usage.py", "50"]))
-        self.assertIn("usage:", usage.main(["usage.py", "50", "70", "40", "1"]))
+        self.assertIn("usage:", usage.main(["usage.py", "50", "70", "40", "Opus", "1"]))
+
+    def test_weekly_floor_can_follow_another_model_or_the_all_model_total(self):
+        data = claude()
+        data["limits"].append(
+            {**data["limits"][2], "percent": 33, "scope": {"model": {"display_name": "Opus"}}}
+        )
+        self.assertEqual(usage.claude_meters(data, NOW, "Opus"), (33, 10.0))
+        self.assertEqual(usage.claude_meters(data, NOW, "all"), (8.0, 10.0))
+        with self.assertRaisesRegex(usage.Unavailable, "no single Sonnet weekly meter"):
+            usage.claude_meters(data, NOW, "Sonnet")
+        saved = Path(tempfile.mkdtemp()) / "usage.json"
+        with (
+            mock.patch.object(usage, "claude_fetch", lambda: data),
+            mock.patch.object(usage, "codex_fetch", lambda: (_ for _ in ()).throw(OSError())),
+            mock.patch.object(usage, "now", lambda: NOW),
+            mock.patch.dict(os.environ, {"GOAL_USAGE_FILE": str(saved)}),
+        ):
+            code, out = run_main("50", "50", "50", "Opus")
+        self.assertEqual(code, 0)
+        self.assertIn("claude opus weekly: 67% remaining", out)
+        self.assertEqual(
+            json.loads(saved.read_text()),
+            {"remaining": [67, 90.0, None], "at": NOW},
+        )
 
 
 if __name__ == "__main__":

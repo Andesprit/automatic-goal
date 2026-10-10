@@ -11,6 +11,10 @@ existing result, actual HEAD, and worktree before repairing the artifact. Do not
 completed work. A transport failure gets one retry; malformed results get two recovery
 attempts. Unexpected Git state stops with OPERATIONAL_FAILURE and preserves all work.
 
+Before you end your turn, run `python3 <conduit_dir>/scripts/run.py check` from the worktree
+root. It validates result.json against this request and the actual Git state without changing
+anything, and prints `OK` or `INVALID` with the reason. Repair the result until it prints OK.
+
 All text fields below must be nonempty strings. Text lists must be nonempty except
 `assumptions`, `findings`, `limitations`, and `remaining`, which may be empty.
 Do not use placeholder evidence: name the command, observation or artifact that supports
@@ -41,8 +45,24 @@ Every implementation, review, and final result has a nonempty `checks` array:
 ```
 
 READY implementations, ACCEPT reviews, and ACHIEVED outcomes require passing checks.
+A check is something you ran that passed. A command that is expected to fail, such as a
+baseline reproduction of the original problem, belongs in `evidence`, not in `checks`.
 For a manual/browser check, record the reproducible action sequence as `command` and
 use exit code 0 for pass or 1 for fail. Include actual elapsed time; no assertion quotas.
+
+## Notes for later agents
+
+Any stage result may add `learned`, a list of at most five notes:
+
+```json
+"learned": [{"kind":"pitfall","note":"One sentence a later agent can act on","evidence":"The command, file or observation behind it"}]
+```
+
+`kind` is `fact` (how the code or its tools work), `pitfall` (something that cost time and how
+to avoid it) or `decision` (a choice later work must respect). The controller adds new notes to
+"What we know" at the top of `.atelier/implementations/index.md`, which every agent reads first.
+Report only what that section does not already say; verdicts on ideas are recorded for you.
+A note taken on a milestone that was later rolled back is kept and marked as unverified.
 
 ## SUPERVISE
 
@@ -123,14 +143,20 @@ and returns to the supervisor. The run continues.
 ## REVIEW
 
 ```json
-{"request_id":"copy request.id","head":"full reviewed commit hash","verdict":"REVISE","ready_percent":55,"correctness":"Independent correctness conclusion","value":"Demonstrated contribution to the outcome","evidence":["Evidence supporting both conclusions"],"checks":[{"command":"independent test","exit_code":1,"summary":"failure reproduced","duration_seconds":1}],"findings":["Concrete required repair and how to verify completion"],"notes":[],"reason":"Expected benefit justifies remaining repair cost","repair_estimate_seconds":300}
+{"request_id":"copy request.id","head":"full reviewed commit hash","verdict":"REVISE","ready_percent":55,"correctness":"Independent correctness conclusion","value":"Demonstrated contribution to the outcome","evidence":["Evidence supporting both conclusions"],"checks":[{"command":"independent test","exit_code":1,"summary":"failure reproduced","duration_seconds":1}],"findings":["high: Concrete required repair and how to verify completion"],"notes":[],"reason":"Expected benefit justifies remaining repair cost","repair_estimate_seconds":300}
 ```
 
 Verdicts: ACCEPT, REVISE, ABANDON. `ready_percent` (integer 0-100, required) is the share of
 the change the reviewer would keep exactly as it is. ACCEPT requires `ready_percent` of at least
-70, passing checks and no unresolved required `findings`. Small non-blocking issues go in
+70, passing checks and no unresolved required `findings`. Medium and low issues go in
 `notes` (optional list); the report shows them to the human who picks milestones after the run.
 REVISE requires findings and a positive `repair_estimate_seconds` including re-review.
+Rate every issue. `critical`: data loss, a security hole, or the milestone's main path does not
+work at all. `high`: an acceptance criterion fails, behavior the brief preserves broke, a
+required check fails, or someone cannot complete the main path. `medium`: a real defect that
+leaves the acceptance criteria working. `low`: polish. Only critical and high issues are
+`findings`, and each must start with `critical: ` or `high: `. Medium and low issues are approved
+as they are: they go in `notes` (label them `medium: ` or `low: `) and never justify REVISE.
 ABANDON explains weak value, a disproven hypothesis, or unjustified repair cost. The runner
 records exhausted repair budgets as DEFERRED, not a judgment that the idea lacked value.
 Milestone acceptance does not establish overall outcome achievement.
