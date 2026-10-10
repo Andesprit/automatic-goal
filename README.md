@@ -20,7 +20,8 @@ Requirements: Git, Bash, Python 3.11+ as `python3`, Atelier, and the `codex` and
 harnesses with their existing logins. Python helpers use the standard library; reports/tests
 also need PyYAML. Use a clean, dedicated linked worktree and a normal main checkout with a
 `.git` directory. Main checkouts, detached HEAD, submodules and tracked `.atelier/` files are
-refused. Never run overlapping flows in one worktree.
+refused. Never run overlapping flows in one worktree. On Windows run from Git Bash; without
+Developer Mode the links to shared history are created as directory junctions.
 
 ```sh
 cd /path/to/project
@@ -49,6 +50,7 @@ in the foreground before the harness closes the session. Nothing is pushed or de
 | `min_claude_5h_remaining` | 50 | Claude five-hour remaining floor |
 | `min_codex_remaining` | 30 | Codex weekly remaining floor |
 | `usage_poll_seconds` | 300 | Seconds between usage checks while paused, 1–3600 |
+| `claude_weekly_model` | Fable | Model whose weekly meter the first floor applies to, or `all` |
 
 Choose the finishing reserve for the project's risk and run length. The supervisor cannot
 finish early or lower your reserve or usage floors: the final demonstration starts only when
@@ -82,7 +84,10 @@ flow ID and output log. Installation does not start a run. The conduits do not s
    space is used when it sharpens an idea or reveals a bolder one.
 2. **Maintain the outcome.** The brief, priority and milestones persist across stage sessions.
    Codex consults shared accepted, abandoned and unfinished history, checking which changes
-   actually exist on the branch. A changed brief requires an explicit evidence-backed replan;
+   actually exist on the branch. Every stage can also report up to five notes (a fact about the
+   code or its tools, a pitfall, a decision). They are listed under "What we know" at the top of
+   the shared index, which every agent reads before exploring, so later agents do not rediscover
+   them. A note taken on work that was rolled back stays, marked as unverified. A changed brief requires an explicit evidence-backed replan;
    the earlier brief remains in the event log. New ideas can be added at every checkpoint; when
    the brief's criteria are met or only polish is left, Codex raises the bar with bolder ones.
    Parts of the goal nobody has tried come before polish. At checkpoints Codex chooses to build,
@@ -100,7 +105,14 @@ flow ID and output log. Installation does not start a run. The conduits do not s
 5. **Repair worthwhile work.** The reviewer scores how much of the change is ready as is.
    ACCEPT retains the milestone and needs at least 70% ready; small issues become notes for you
    to review after the run. REVISE sends concrete blocking findings and completion criteria back
-   to Claude on the same milestone; ABANDON records weak value, a disproven hypothesis or
+   to Claude on the same milestone. The reviewer rates every issue critical, high, medium or
+   low, and only critical and high ones are findings that cost a repair round: data loss, a
+   security hole, a main path that does not work, a failing acceptance criterion, a regression
+   or a failing required check. Medium and low issues are approved as they are and listed as
+   notes, because a repair round costs far more than such a fix; expect accepted milestones to
+   carry more notes. The final demonstration uses the same bar for integration repairs.
+   A repair and its re-review start from the milestone diff and the findings, not a new
+   exploration of the project; ABANDON records weak value, a disproven hypothesis or
    unjustified repair cost, with what was learned. If Claude finds the idea unworkable it returns
    BLOCKED with what it tried and saw. Repair has both a count and time budget. Exhaustion
    becomes DEFERRED, separately from a judgment that the idea was bad. None of these end the
@@ -130,7 +142,8 @@ The main checkout holds shared, local-only records:
 
 ```text
 .atelier/implementations/
-  index.md                   # numbered milestone history and links to run handoffs
+  index.md                   # what agents learned, milestone history and links to run handoffs
+  notes.jsonl                # the notes behind "What we know"; delete a line to retire a note
   0001.md                    # hypothesis, contribution, implementation and reviews
   runs/<run-id>/
     state.json               # canonical brief, milestones, decisions and timestamps
@@ -149,7 +162,10 @@ survive worktree deletion but are local: Git pushes do not transfer the journals
 Back them up separately. Raw flow logs remain under their originating worktree's `.atelier/flows`.
 
 Final chat formatting is not a control protocol. A valid stage JSON result is accepted regardless
-of the final message. Missing, stale or malformed JSON gets **two bounded recovery attempts**
+of the final message. Each agent is told to run `run.py check` before it ends its turn: it validates
+the result against the request and the actual Git state without changing anything, so a malformed
+result or a dirty tree is repaired in the same session instead of costing another stage. Results
+are read in any Unicode encoding, including the byte-order mark PowerShell writes. Missing, stale or malformed JSON gets **two bounded recovery attempts**
 with the same request ID and actual Git state, so a committed implementation is not repeated.
 Exhaustion is OPERATIONAL_FAILURE, not ABANDON. An implementation blocker marks only that
 milestone BLOCKED, saves its code under a ref and returns to the supervisor. Unexpected branch,
@@ -166,6 +182,15 @@ atelier logs <flow_id>
 cat .atelier/goal/handoff.md
 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 atelier run --resume <flow_id>
 ```
+
+To close a run before its deadline, run this in its worktree:
+
+```sh
+python3 .atelier/conduits/goal_iteration/scripts/run.py stop "why you are stopping"
+```
+
+The run is recorded as PARTIAL with your reason, the handoff is written, and the loop ends at its
+next pass. Nothing is reset: an unfinished milestone and any commit you made stay on the branch.
 
 Resume retains the original deadline and run checkpoint. Do not start a duplicate loop, reset
 unfinished work, or blindly edit canonical state. A terminal BLOCKED/OPERATIONAL_FAILURE run
@@ -187,6 +212,7 @@ readable and are considered during planning.
 | `min_claude_5h_remaining` | 50 | Remaining Claude 5-hour allowance (100 minus its utilization) |
 | `min_codex_remaining` | 30 | Remaining Codex weekly allowance of the `codex` bucket (100 minus its `usedPercent`), not Spark or base-model buckets |
 | `usage_poll_seconds` | 300 | Wait between rechecks while paused (1-3600) |
+| `claude_weekly_model` | Fable | Display name of the model whose weekly meter `min_claude_fable_remaining` applies to (for example `Opus`), or `all` for the all-model weekly total |
 
 Limits are whole percentages from 1 to 100. Every limit is a floor on what is left: less than
 that much remaining pauses, exactly that much remaining still runs. Every meter must be readable
@@ -242,6 +268,9 @@ The server stays local, refreshes every three seconds and stops with Ctrl-C. It 
 agents or change runs. Keep exported reports private when their evidence contains private data.
 
 ## Upgrade from one-commit iterations
+
+Review findings must now start with `critical: ` or `high: `; finish or stop a run in progress
+before updating.
 
 This changes execution semantics and stage names. Finish or inspect existing runs before updating
 an installation; do not resume an old KEEP/DISCARD flow with these new conduits. Install both

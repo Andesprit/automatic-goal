@@ -715,7 +715,31 @@ class Main(unittest.TestCase):
 
     def test_wrong_argument_count_is_an_error(self):
         self.assertIn("usage:", usage.main(["usage.py", "50"]))
-        self.assertIn("usage:", usage.main(["usage.py", "50", "70", "40", "1"]))
+        self.assertIn("usage:", usage.main(["usage.py", "50", "70", "40", "Opus", "1"]))
+
+    def test_weekly_floor_can_follow_another_model_or_the_all_model_total(self):
+        data = claude()
+        data["limits"].append(
+            {**data["limits"][2], "percent": 33, "scope": {"model": {"display_name": "Opus"}}}
+        )
+        self.assertEqual(usage.claude_meters(data, NOW, "Opus"), (33, 10.0))
+        self.assertEqual(usage.claude_meters(data, NOW, "all"), (8.0, 10.0))
+        with self.assertRaisesRegex(usage.Unavailable, "no single Sonnet weekly meter"):
+            usage.claude_meters(data, NOW, "Sonnet")
+        saved = Path(tempfile.mkdtemp()) / "usage.json"
+        with (
+            mock.patch.object(usage, "claude_fetch", lambda: data),
+            mock.patch.object(usage, "codex_fetch", lambda: (_ for _ in ()).throw(OSError())),
+            mock.patch.object(usage, "now", lambda: NOW),
+            mock.patch.dict(os.environ, {"GOAL_USAGE_FILE": str(saved)}),
+        ):
+            code, out = run_main("50", "50", "50", "Opus")
+        self.assertEqual(code, 0)
+        self.assertIn("claude opus weekly: 67% remaining", out)
+        self.assertEqual(
+            json.loads(saved.read_text()),
+            {"remaining": [67, 90.0, None], "at": NOW},
+        )
 
 
 if __name__ == "__main__":

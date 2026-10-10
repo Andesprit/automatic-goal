@@ -16,6 +16,7 @@ inputs:
   min_claude_5h_remaining: {description: "Pause while the remaining Claude 5-hour allowance is below this percent (1-100); exactly this much remaining still runs. Trusted operator input, interpolated into shell.", default: "50"}
   min_codex_remaining: {description: "Pause while the remaining Codex weekly allowance is below this percent (1-100); exactly this much remaining still runs. Trusted operator input, interpolated into shell.", default: "30"}
   usage_poll_seconds: {description: "Seconds to wait before rechecking usage while paused (1-3600). Trusted operator input, interpolated into shell.", default: "300"}
+  claude_weekly_model: {description: "Display name of the Claude model whose weekly meter min_claude_fable_remaining applies to (for example Fable or Opus), or all for the all-model weekly total. Trusted operator input, interpolated into shell.", default: "Fable"}
 tasks:
   - setup:
       description: Require CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1, guard the dedicated worktree, create .atelier/implementations, print the deadline as epoch seconds
@@ -32,8 +33,9 @@ tasks:
         [ "$seconds" -ge 1 ] && [ "$seconds" -le $(( 720 * 3600 )) ] \
           || fail "hours must be more than 0 and at most 720, got '$hours'"
         git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "not inside a git worktree"
-        [ "$(git rev-parse --show-toplevel)" = "$(pwd -P)" ] || fail "run from the worktree root"
-        common=$(cd "$(git rev-parse --git-common-dir)" && pwd -P)
+        # Compare Git's own answers: on Windows Git prints D:/x where the shell prints /d/x.
+        [ -z "$(git rev-parse --show-prefix)" ] || fail "run from the worktree root"
+        common=$(git rev-parse --path-format=absolute --git-common-dir)
         [ "$(git rev-parse --absolute-git-dir)" != "$common" ] \
           || fail "this is a main checkout or a submodule; use a dedicated linked worktree (git worktree add ../<dir> -b <branch>)"
         git symbolic-ref -q HEAD >/dev/null || fail "detached HEAD; check out a dedicated branch"
@@ -65,6 +67,7 @@ tasks:
         min_claude_5h_remaining: "{{inputs.min_claude_5h_remaining}}"
         min_codex_remaining: "{{inputs.min_codex_remaining}}"
         usage_poll_seconds: "{{inputs.usage_poll_seconds}}"
+        claude_weekly_model: "{{inputs.claude_weekly_model}}"
       depends_on: [setup, initialize]
       repeat: 500
       until: 'output.match(^GOAL_DONE$)'

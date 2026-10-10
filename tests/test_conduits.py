@@ -139,6 +139,12 @@ class Guards(Repo):
                 self.assertAlmostEqual(int(r.stdout), time.time() + 5400, delta=3)
         for cwd in [self.main, self.wt / '.atelier']:
             self.assertNotEqual(self.cmd('init', self.deadline, 20, 2, 5, cwd=cwd).returncode, 0)
+        (self.wt / 'sub').mkdir()
+        for cwd, message in [(self.main, 'main checkout'), (self.wt / 'sub', 'worktree root')]:
+            r = subprocess.run(['bash', '-c', setup.replace('{{inputs.hours}}', '1')],
+                               cwd=cwd, env=GIT_ENV, capture_output=True, text=True, check=False)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn(message, r.stderr)
         git(self.wt, 'checkout', '-q', '--detach')
         self.assertNotEqual(self.cmd('init', self.deadline, 20, 2, 5).returncode, 0)
 
@@ -204,7 +210,7 @@ class Outcomes(Repo):
 
     def test_repair_cannot_rewrite_the_reviewed_commit(self):
         self.build()
-        self.result({**REVIEW, 'verdict': 'REVISE', 'findings': ['Fix recovery'], 'repair_estimate_seconds': 5})
+        self.result({**REVIEW, 'verdict': 'REVISE', 'findings': ['high: Fix recovery'], 'repair_estimate_seconds': 5})
         self.route('IMPLEMENT')
         git(self.wt, 'reset', '--hard', self.base)
         self.commit('replacement.txt')
@@ -230,7 +236,7 @@ class Outcomes(Repo):
 
     def test_multiple_commits_review_repair_and_final_demonstration(self):
         self.build()
-        self.result({**REVIEW, 'verdict': 'REVISE', 'findings': ['Add recovery path; verify c.txt'], 'repair_estimate_seconds': 5})
+        self.result({**REVIEW, 'verdict': 'REVISE', 'findings': ['high: Add recovery path; verify c.txt'], 'repair_estimate_seconds': 5})
         self.route('IMPLEMENT')
         self.commit('c.txt')
         self.result({'status': 'READY', 'summary': 'Recovery works', 'checks': [CHECK], 'evidence': ['b.txt and c.txt']})
@@ -274,7 +280,7 @@ class Outcomes(Repo):
     def test_exhausted_repair_budget_is_deferred_not_abandoned(self):
         self.build()
         self.set_state(max_revisions=0)
-        self.result({**REVIEW, 'verdict': 'REVISE', 'findings': ['Fix recovery'], 'repair_estimate_seconds': 5})
+        self.result({**REVIEW, 'verdict': 'REVISE', 'findings': ['high: Fix recovery'], 'repair_estimate_seconds': 5})
         state = self.state()
         self.assertEqual(state['milestones'][0]['status'], 'DEFERRED')
         self.assertEqual(state['phase'], 'SUPERVISE')
@@ -377,6 +383,97 @@ class Outcomes(Repo):
         self.assertIn('Reviewer notes: Label wraps at 320px', handoff)
         self.assertIn(f"git cherry-pick {self.base[:12]}..{state['accepted_head'][:12]}", handoff)
 
+    def test_only_critical_and_high_findings_send_work_back(self):
+        self.build()
+        revise = {**REVIEW, 'verdict': 'REVISE', 'repair_estimate_seconds': 5}
+        self.assertEqual(self.result({**revise, 'findings': ['Rename the helper']}), 'RECOVER')
+        self.assertIn('critical', self.state()['reason'])
+        self.assertEqual(self.result({**revise, 'findings': ['medium: Label wraps at 320px']}), 'RECOVER')
+        # Anything below high is approved as it is, with the issue kept for the human.
+        self.result({**REVIEW, 'notes': ['medium: Label wraps at 320px']})
+        self.assertEqual(self.state()['milestones'][0]['status'], 'ACCEPT')
+
+    def write(self, value, raw=None):
+        value = {'request_id': self.state()['request']['id'], 'head': git(self.wt, 'rev-parse', 'HEAD'), **value}
+        (self.wt / '.atelier/goal/result.json').write_bytes(raw or json.dumps(value).encode())
+
+    def test_agent_can_check_its_result_without_changing_anything(self):
+        self.init()
+        self.route('SUPERVISE')
+        self.write({**SUPERVISE, 'milestone': {**MILESTONE, 'estimated_seconds': 99999}})
+        r = self.cmd('check')
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('INVALID', r.stdout)
+        self.assertIn('choose a smaller one', r.stdout)
+        self.write({key: value for key, value in SUPERVISE.items() if key != 'priority'})
+        self.assertIn("missing field 'priority'", self.cmd('check').stdout)
+        self.write(SUPERVISE)
+        bare = {key: value for key, value in GIT_ENV.items() if key != 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'}
+        r = self.cmd('check', env=bare)
+        self.assertEqual((r.returncode, r.stdout), (0, 'OK: result.json is valid for this SUPERVISE request'))
+        state = self.state()
+        self.assertEqual((state['milestones'], state['protocol_failures'], state['brief']), ([], 0, None))
+        self.assertEqual(list((self.main / '.atelier/implementations').glob('0*.md')), [])
+        self.assertEqual(self.cmd('apply').stdout, 'CONTINUE')
+        self.route('IMPLEMENT')
+        self.commit()
+        (self.wt / 'stray.txt').write_text('left behind')
+        self.write({'status': 'READY', 'summary': 'Working path', 'checks': [CHECK], 'evidence': ['b.txt']})
+        self.assertIn('not clean', self.cmd('check').stdout)
+        (self.wt / 'stray.txt').unlink()
+        self.assertEqual(self.cmd('check').returncode, 0)
+        self.assertEqual(self.cmd('apply').stdout, 'CONTINUE')
+        self.route('REVIEW')
+        head = git(self.wt, 'rev-parse', 'HEAD')
+        self.write({**REVIEW, 'verdict': 'ABANDON'})
+        self.assertEqual(self.cmd('check').returncode, 0)
+        self.assertEqual(git(self.wt, 'rev-parse', 'HEAD'), head)
+        self.assertEqual(git(self.wt, 'for-each-ref', 'refs/automatic-goal'), '')
+        self.assertEqual(self.state()['milestones'][0]['status'], 'REVIEWING')
+
+    def test_result_with_a_byte_order_mark_is_accepted(self):
+        self.init()
+        self.route('SUPERVISE')
+        body = json.dumps({**SUPERVISE, 'request_id': self.state()['request']['id']})
+        for raw in (body.encode('utf-8-sig'), body.encode('utf-16')):
+            self.write({}, raw=raw)
+            self.assertEqual(self.cmd('check').returncode, 0)
+        self.assertEqual(self.cmd('apply').stdout, 'CONTINUE')
+
+    def test_operator_can_close_a_run_early_even_after_the_branch_moved(self):
+        self.build()
+        self.commit('extra.txt')
+        r = self.cmd('stop', 'enough for today')
+        self.assertEqual((r.returncode, r.stdout), (0, 'GOAL_DONE'))
+        state = self.state()
+        self.assertEqual(state['status'], 'PARTIAL')
+        self.assertIn('Stopped by the operator: enough for today', state['reason'])
+        self.assertIn('unfinished milestone remains', (self.wt / '.atelier/goal/handoff.md').read_text())
+        self.route('GOAL_DONE')
+        self.assertEqual(git(self.wt, 'log', '-1', '--format=%s'), 'add extra.txt')
+
+    def test_what_agents_learn_reaches_every_later_agent_once(self):
+        note = {'kind': 'pitfall', 'note': 'The suite needs FOO=1', 'evidence': 'make test fails without it'}
+        self.init()
+        self.route('SUPERVISE')
+        self.assertEqual(self.result({**SUPERVISE, 'learned': [{**note, 'kind': 'rumor'}]}), 'RECOVER')
+        self.assertEqual(self.result({**SUPERVISE, 'learned': [note] * 6}), 'RECOVER')
+        self.result({**SUPERVISE, 'learned': [note]})
+        self.route('IMPLEMENT')
+        self.commit()
+        seen = {'kind': 'fact', 'note': 'b.txt drives the first run', 'evidence': 'read b.txt'}
+        self.result({'status': 'READY', 'summary': 'Working path', 'checks': [CHECK], 'evidence': ['b.txt'],
+                     'learned': [note, seen]})
+        index = (self.main / '.atelier/implementations/index.md').read_text()
+        self.assertEqual(index.count('The suite needs FOO=1'), 1)
+        self.assertIn('- **fact** b.txt drives the first run — read b.txt\n', index)
+        self.route('REVIEW')
+        self.result({**REVIEW, 'verdict': 'ABANDON'})
+        index = (self.main / '.atelier/implementations/index.md').read_text()
+        # A note taken on work that was rolled back may describe code that no longer exists.
+        self.assertIn('read b.txt (seen on work that was not kept; verify first)', index)
+        self.assertIn('- **pitfall** The suite needs FOO=1 — make test fails without it\n', index)
+
     def test_final_achievement_requires_every_success_criterion(self):
         self.build()
         self.result(REVIEW)
@@ -412,6 +509,17 @@ class Budgets(Repo):
         self.assertEqual(self.state()['status'], 'ACTIVE')
         self.assertFalse(self.state()['usage']['ready'])
 
+    def test_weekly_meter_choice_reaches_the_usage_reader(self):
+        self.init()
+        (self.scripts / 'usage.py').write_text(
+            "import json, os, sys\nfrom pathlib import Path\n"
+            "Path(os.environ['GOAL_USAGE_FILE']).write_text(json.dumps("
+            "{'remaining': [99, 99, 99], 'model': sys.argv[4]}))\n")
+        r = self.cmd('route', self.run_id, self.deadline, 50, 50, 30, 1, 'Opus')
+        self.assertEqual((r.returncode, r.stdout), (0, 'SUPERVISE'), r.stderr)
+        self.assertEqual(json.loads((self.wt / '.atelier/goal/usage.json').read_text())['model'], 'Opus')
+        self.assertNotEqual(self.cmd('route', self.run_id, self.deadline, 50, 50, 30, 1, 'x;y').returncode, 0)
+
     def test_time_reserve_stops_a_selected_but_unstarted_feature(self):
         self.init()
         self.route()
@@ -436,7 +544,7 @@ class Budgets(Repo):
         self.build()
         (self.scripts / 'meters.json').write_text('[52, 99, 99]')
         self.route('REVIEW')
-        self.result({**REVIEW, 'verdict': 'REVISE', 'findings': ['Fix c'], 'repair_estimate_seconds': 5})
+        self.result({**REVIEW, 'verdict': 'REVISE', 'findings': ['high: Fix c'], 'repair_estimate_seconds': 5})
         self.route('IMPLEMENT')
 
     def test_selected_milestone_that_no_longer_fits_returns_to_supervisor(self):
@@ -477,7 +585,7 @@ class Budgets(Repo):
 
     def test_repair_wait_cannot_consume_handoff_reserve(self):
         self.build()
-        self.result({**REVIEW, 'verdict': 'REVISE', 'findings': ['Fix c'], 'repair_estimate_seconds': 30})
+        self.result({**REVIEW, 'verdict': 'REVISE', 'findings': ['high: Fix c'], 'repair_estimate_seconds': 30})
         self.set_state(handoff_seconds=3599)
         self.route('SUPERVISE')  # the supervisor may still pick a smaller idea before the reserve
         self.assertEqual(self.state()['milestones'][0]['status'], 'DEFERRED')
@@ -549,7 +657,7 @@ class NativeLoop(Repo):
         self.script('claude', [
             ("printf b > b.txt\ngit add b.txt\ngit commit -qm first", {'status':'READY','summary':'First run','checks':[CHECK],'evidence':['b.txt']}),
             ("printf c > c.txt\ngit add c.txt\ngit commit -qm repair", {'status':'READY','summary':'Recovery','checks':[CHECK],'evidence':['c.txt']})])
-        self.script('codex', [('test -f b.txt', {**REVIEW, 'verdict':'REVISE','findings':['Add c.txt'],'repair_estimate_seconds':10}), ('test -f c.txt', REVIEW)])
+        self.script('codex', [('test -f b.txt', {**REVIEW, 'verdict':'REVISE','findings':['high: Add c.txt'],'repair_estimate_seconds':10}), ('test -f c.txt', REVIEW)])
         self.script('finalizer', [('test -f b.txt && test -f c.txt', FINAL)])
         r = self.flow()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
