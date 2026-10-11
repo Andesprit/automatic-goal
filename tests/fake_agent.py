@@ -7,12 +7,14 @@ starts a fresh agent process for every loop iteration, so the turn index is the 
 STATE_DIR/NAME.calls. On each prompt the agent saves the prompt text as NAME.prompt.<n>, runs the
 turn's `run` script with bash in the session cwd (the worktree), then replies with `reply` where
 {head} is the worktree's current HEAD. Past the last scripted turn the last turn repeats.
+The session each prompt arrived in is saved as NAME.session.<n>; a session can be resumed.
 """
 
 import asyncio
 import json
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import acp
@@ -24,6 +26,9 @@ from acp.schema import (
     NewSessionResponse,
     PromptCapabilities,
     PromptResponse,
+    ResumeSessionResponse,
+    SessionCapabilities,
+    SessionResumeCapabilities,
     TextContentBlock,
 )
 
@@ -43,6 +48,7 @@ class Agent:
             protocol_version=acp.PROTOCOL_VERSION,
             agent_capabilities=AgentCapabilities(
                 load_session=False,
+                session_capabilities=SessionCapabilities(resume=SessionResumeCapabilities()),
                 prompt_capabilities=PromptCapabilities(
                     audio=False, embedded_context=False, image=False
                 ),
@@ -53,7 +59,7 @@ class Agent:
 
     async def new_session(self, cwd, **kwargs):
         self.cwd = cwd
-        return NewSessionResponse(session_id="fake-session")
+        return NewSessionResponse(session_id=uuid.uuid4().hex)
 
     async def prompt(self, prompt, session_id, **kwargs):
         global NAME
@@ -69,6 +75,7 @@ class Agent:
         (STATE / f"{NAME}.prompt.{n + 1}").write_text(
             "".join(getattr(block, "text", "") for block in prompt)
         )
+        (STATE / f"{NAME}.session.{n + 1}").write_text(session_id)
         turns = json.loads((STATE / f"{NAME}.json").read_text())["turns"]
         turn = turns[min(n, len(turns) - 1)]
         subprocess.run(
@@ -110,8 +117,9 @@ class Agent:
     async def load_session(self, *args, **kwargs):
         return None
 
-    async def resume_session(self, *args, **kwargs):
-        raise NotImplementedError
+    async def resume_session(self, cwd, session_id, **kwargs):
+        self.cwd = cwd
+        return ResumeSessionResponse()
 
     async def set_config_option(self, *args, **kwargs):
         return None
@@ -122,6 +130,7 @@ class Agent:
 
 if __name__ == "__main__":
     try:
-        asyncio.run(acp.run_agent(Agent()))
+        # session/resume is unstable in ACP; the real adapters serve it.
+        asyncio.run(acp.run_agent(Agent(), use_unstable_protocol=True))
     except (KeyboardInterrupt, EOFError):
         sys.exit(0)

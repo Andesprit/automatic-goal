@@ -16,7 +16,7 @@ work, and you pick which accepted milestones to keep after the run.
 
 ## Setup and run
 
-Requirements: Git, Bash, Python 3.11+ as `python3`, Atelier, and the `codex` and `claude-code`
+Requirements: Git, Bash, Python 3.11+ as `python3`, Atelier 0.12.0+, and the `codex` and `claude-code`
 harnesses with their existing logins. Python helpers use the standard library; reports/tests
 also need PyYAML. Use a clean, dedicated linked worktree and a normal main checkout with a
 `.git` directory. Main checkouts, detached HEAD, submodules and tracked `.atelier/` files are
@@ -75,6 +75,11 @@ flow ID and output log. Installation does not start a run. The conduits do not s
 
 ## How a run makes decisions
 
+Codex keeps one conversation for the whole run: every plan, review and the final demonstration
+is its next turn. Claude keeps one conversation per milestone, from the first build to the
+verdict. The saved files remain the source of truth, so a stage whose conversation cannot be
+reloaded starts a new one and continues from them.
+
 1. **Observe and compare.** Codex inspects the actual user experience, records reproducible
    baseline steps, failures or measurements, states assumptions, and defines success and
    preserved behavior. It normally compares three to five opportunities (at least two credible
@@ -105,7 +110,8 @@ flow ID and output log. Installation does not start a run. The conduits do not s
 5. **Repair worthwhile work.** The reviewer scores how much of the change is ready as is.
    ACCEPT retains the milestone and needs at least 70% ready; small issues become notes for you
    to review after the run. REVISE sends concrete blocking findings and completion criteria back
-   to Claude on the same milestone. The reviewer rates every issue critical, high, medium or
+   to Claude on the same milestone, in the conversation that built it.
+   The reviewer rates every issue critical, high, medium or
    low, and only critical and high ones are findings that cost a repair round: data loss, a
    security hole, a main path that does not work, a failing acceptance criterion, a regression
    or a failing required check. Medium and low issues are approved as they are and listed as
