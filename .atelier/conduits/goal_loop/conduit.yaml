@@ -1,9 +1,9 @@
 name: goal_loop
 description: >-
   Observe, compare opportunities, build bold milestones, review and repair, and keep going
-  until the time is used, then demonstrate the result. Codex supervises and reviews; Claude
-  Code implements. Durable checkpoints preserve priorities and evidence across multiple commits
-  and stages. The finishing reserve defaults to 10 percent. Usage floors remain strict; below a
+  until the time is used, then demonstrate the result. By default Codex directs (plans, reviews,
+  demonstrates) and Claude Code builds; choose other agents or models with --agent. Durable
+  checkpoints preserve priorities and evidence across multiple commits and stages. The finishing reserve defaults to 10 percent. Usage floors remain strict; below a
   floor, or inside the buffer before new work, the run waits for a reset instead of ending.
   An active agent turn has a soft deadline.
 inputs:
