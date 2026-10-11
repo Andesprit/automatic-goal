@@ -40,9 +40,9 @@ tasks:
     depends_on: []
     timeout: 3800
 - supervise:
-    description: You are the outcome supervisor (Codex).
+    description: You are the outcome supervisor.
     task: |
-      You are the outcome supervisor (Codex).
+      You are the outcome supervisor.
 
       On the first checkpoint, observe the actual user path and write a working brief. Distinguish
       measured facts from assumptions. Define observable success and what must remain intact. For
@@ -131,9 +131,9 @@ tasks:
     depends_on:
     - route.output.match(^IMPLEMENT$)
 - implement:
-    description: You are the milestone implementer (Claude Code).
+    description: You are the milestone implementer.
     task: |
-      You are the milestone implementer (Claude Code).
+      You are the milestone implementer.
 
       Implement or repair ONLY the active milestone in state.json. Preserve the outcome, acceptance
       criteria, and existing behavior listed in the brief. Multiple focused commits are allowed;
@@ -204,9 +204,9 @@ tasks:
     depends_on:
     - implement
 - review:
-    description: You are the independent milestone reviewer (Codex).
+    description: You are the independent milestone reviewer.
     task: |
-      You are the independent milestone reviewer (Codex).
+      You are the independent milestone reviewer.
 
       Read the active milestone, its implementation evidence, and its entire base..head diff.
       Judge TWO separate questions: does it work correctly and preserve required behavior; and
@@ -287,9 +287,9 @@ tasks:
     depends_on:
     - review
 - finalize:
-    description: You are the outcome demonstrator (Codex).
+    description: You are the outcome demonstrator.
     task: |
-      You are the outcome demonstrator (Codex).
+      You are the outcome demonstrator.
 
       Revisit the original baseline and acceptance criteria against the complete accepted branch.
       Run integrated validation and the actual user path. Report before, after, reproducible evidence,

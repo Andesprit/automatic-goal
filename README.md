@@ -73,11 +73,32 @@ process deadlines. At most 500 passes, including pauses, run before the loop fai
 For unattended use, launch through a persistent job mechanism and record the worktree, branch,
 flow ID and output log. Installation does not start a run. The conduits do not schedule themselves.
 
+### Choose the director and the worker
+
+By default Codex directs (plans, reviews and demonstrates) and Claude Code builds. Any agent
+or model can take either role for one run, without editing the conduits:
+
+```sh
+DIRECTOR='claude-code:opus:xhigh'   # <agent>, <agent>:<model> or <agent>:<model>:<effort>
+WORKER='codex:gpt-5.6-sol:high'
+CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 atelier run goal_loop \
+  --input hours=4 --input goal="..." \
+  --agent iterate.supervise="$DIRECTOR" --agent iterate.review="$DIRECTOR" \
+  --agent iterate.finalize="$DIRECTOR" --agent iterate.implement="$WORKER"
+```
+
+Give the three director steps the same agent, so they share one conversation.
+`atelier harness check <agent>` lists the models and efforts an agent offers; the names change
+between agent versions. `atelier check goal_loop --recursive --probe` with the same `--agent`
+flags confirms every choice is offered, without sending a prompt, and `atelier plan goal_loop`
+previews it. The choice is saved with the run, so `--resume` keeps it. The usage floors still read
+the Claude and Codex meters, whichever role each has.
+
 ## How a run makes decisions
 
-Codex keeps one conversation for the whole run: every plan, review and the final demonstration
-is its next turn. Claude keeps one conversation per milestone, from the first build to the
-verdict. The saved files remain the source of truth, so a stage whose conversation cannot be
+The director (Codex by default) keeps one conversation for the whole run: every plan, review
+and the final demonstration is its next turn. The worker (Claude Code by default) keeps one
+conversation per milestone, from the first build to the verdict. The saved files remain the source of truth, so a stage whose conversation cannot be
 reloaded starts a new one and continues from them.
 
 1. **Observe and compare.** Codex inspects the actual user experience, records reproducible
