@@ -525,6 +525,11 @@ def check_result():
     return f"OK: result.json is valid for this {state['request']['stage']} request"
 
 
+def session():
+    """Name one agent conversation per milestone, so a repair continues the build that made it."""
+    return f"milestone-{active(location()[1])['id']}"
+
+
 def stop(reason):
     """Close a run early at the operator's request; all work, including an unfinished milestone, is kept."""
     path, state = location()
@@ -672,6 +677,7 @@ def main():
     gate.add_argument("weekly", nargs="?", default="Fable")
     sub.add_parser("apply")
     sub.add_parser("check")
+    sub.add_parser("session")
     sub.add_parser("stop").add_argument("reason")
     args = parser.parse_args()
     try:
@@ -692,6 +698,8 @@ def main():
                 detail = f"missing field {error}" if isinstance(error, KeyError) else error
                 print(f"INVALID ({type(error).__name__}): {detail}")
                 return 1
+        elif args.command == "session":
+            result = session()
         elif args.command == "stop":
             result = stop(args.reason)
         else:

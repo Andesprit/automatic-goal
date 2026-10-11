@@ -669,6 +669,14 @@ class NativeLoop(Repo):
         self.assertEqual(len(list((flows[0] / 'flows').glob('*_goal_iteration'))), 7)
         self.assertEqual((self.agent_state / 'claude.calls').read_text(), '2')
         self.assertIn('concrete findings', (self.agent_state / 'claude.prompt.2').read_text())
+        # One Codex conversation planned, reviewed and demonstrated the whole run; the repair
+        # continued the Claude conversation that built the milestone.
+        claude, *codex = ({p.read_text() for p in self.agent_state.glob(role + '.session.*')}
+                          for role in ('claude', 'supervisor', 'codex', 'finalizer'))
+        self.assertEqual(len(claude), 1)
+        self.assertEqual(len(set().union(*codex)), 1)
+        self.assertTrue(all(codex))
+        self.assertNotEqual(claude, codex[0])
 
     def test_native_protocol_recovery_continues_same_stage(self):
         self.script('supervisor', [('true', {}), (self.EXPIRE, SUPERVISE)])

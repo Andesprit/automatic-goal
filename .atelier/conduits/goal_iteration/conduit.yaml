@@ -110,6 +110,7 @@ tasks:
       background processes and subagents are prohibited because the harness ends the session when
       you reply. Use the time remaining in request.json; leave room for review and the handoff.
     tool: harness:codex
+    session: manager
     interactive: false
     timeout: 1800
     retries: 1
@@ -123,6 +124,12 @@ tasks:
     tool: tool:bash
     depends_on:
     - supervise
+- milestone_session:
+    description: Name the active milestone's conversation, so a repair continues the build that made it
+    task: python3 "{{conduit_dir}}/scripts/run.py" session
+    tool: tool:bash
+    depends_on:
+    - route.output.match(^IMPLEMENT$)
 - implement:
     description: You are the milestone implementer (Claude Code).
     task: |
@@ -182,12 +189,13 @@ tasks:
       background processes and subagents are prohibited because the harness ends the session when
       you reply. Use the time remaining in request.json; leave room for review and the handoff.
     tool: harness:claude-code
+    session: '{{milestone_session.output}}'
     interactive: false
     timeout: 3600
     retries: 1
     retry_backoff: 2
     depends_on:
-    - route.output.match(^IMPLEMENT$)
+    - milestone_session
 - implement_result:
     description: Validate structured output and Git; checkpoint, recover protocol errors, or advance the
       outcome
@@ -264,6 +272,7 @@ tasks:
       background processes and subagents are prohibited because the harness ends the session when
       you reply. Use the time remaining in request.json; leave room for review and the handoff.
     tool: harness:codex
+    session: manager
     interactive: false
     timeout: 1800
     retries: 1
@@ -326,6 +335,7 @@ tasks:
       background processes and subagents are prohibited because the harness ends the session when
       you reply. Use the time remaining in request.json; leave room for review and the handoff.
     tool: harness:codex
+    session: manager
     interactive: false
     timeout: 1800
     retries: 1
