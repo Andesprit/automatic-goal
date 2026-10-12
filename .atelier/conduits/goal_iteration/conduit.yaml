@@ -49,12 +49,24 @@ tasks:
       "lightweight", consider both product simplicity and technical cost; do not claim adoption
       from a usability proxy. Record reproducible baseline steps, failures, timings or measurements.
 
+      Turn the goal into a scorecard: one to six outcomes that together say what progress means
+      here. It is the yardstick for every later decision and the first thing the owner reads, so
+      that one line from them can correct it. A measured outcome has a read-only command whose last
+      line of output is one number. The controller runs it, never you or the worker: at the start,
+      after every worker turn and at the end. Keep it under two minutes and make sure it leaves the
+      worktree untouched. A judged outcome is one you read yourself by using the result as its user
+      would; at least one is required, so that a number alone cannot stand for the goal. Record
+      where each judged outcome starts. When the goal holds several different things, give each its
+      own outcome and say in the brief which comes first and why.
+
       Compare normally three to five meaningful opportunities (at least two credible alternatives),
-      including user benefit, evidence, effort and uncertainty. Rank them by upside: how much better
-      the experience gets if the idea works. Uncertainty is a reason to try an idea, not to skip it;
+      including user benefit, evidence, effort and uncertainty. Rank them by gain: how far the
+      scorecard moves if the idea works. Uncertainty is a reason to try an idea, not to skip it;
       a failed bold attempt is a normal, logged outcome. Choose a primary and a fallback; explain why
       the primary deserves the time. Research competitors and the best products in the space when it
       sharpens an idea or reveals a bolder one. Avoid invented precision or arbitrary value scores.
+      "What the owner said" in the index holds the owner's verdicts on earlier work. It says what
+      counts as progress for this owner; weigh every opportunity against it.
 
       Read .atelier/implementations/index.md and relevant prior decisions, including failures and
       unfinished attempts. Check that accepted commits exist on this branch with git log; do not
@@ -63,21 +75,29 @@ tasks:
       evidence-backed replan can update the brief, retaining history in the event log.
 
       This run works until its time is used; there is no early finish. The controller starts the
-      final demonstration when the finishing reserve arrives. Meeting the brief's success criteria
+      final demonstration when the finishing reserve arrives. Reaching the scorecard's targets
       is not the end: raise the bar. Add new_opportunities whenever you see them, and whenever only
       small polish is left, generate bolder ones (what would make a user say "wow"; what the best
       product in this space does; what a designer, a power user or a newcomer would demand). Parts
       of the user's goal nobody has tried yet come before polish. A human reviews every milestone
       after the run and picks what to keep, so ambition is safe; the reviewer blocks broken work.
 
-      At every checkpoint ask: What did we learn? What is the boldest idea that can be built and
-      reviewed in the remaining feature budget? Choose a coherent, independently useful milestone
-      across files and multiple small commits. Keep milestones independent so a human can take any
-      one of them; list accepted milestone IDs it builds on in depends_on. Mark its ambition (bold,
-      normal or polish), its upside if it works, and the risk of why it might fail. Provide exact
-      acceptance checks and an estimate INCLUDING implementation and review; when little time is
-      left, pick a smaller idea rather than stopping. SWITCH requires evidence and a compared
-      alternative. Return BLOCKED only when no useful work of any kind is possible without a human.
+      At every checkpoint ask: What did we learn? Where does the scorecard stand? What would move
+      it furthest in the remaining feature budget? Prefer a few large milestones to many small
+      ones. A milestone is a bet: it has a time budget sized to the gain you expect, it may take
+      several worker turns, and you check in after each one, so it does not have to fit in a single
+      turn. State its hypothesis: the action, the scorecard outcome it should move, from what to
+      what, why, and the most likely way it fails. For anything larger than polish, name a probe:
+      a few minutes of work that tests that failure before the budget is spent. The worker's first
+      turn does only the probe.
+
+      Choose a coherent, independently useful milestone across files and multiple small commits.
+      Keep milestones independent so a human can take any one of them; list accepted milestone IDs
+      it builds on in depends_on. Mark its ambition (bold, normal or polish), its upside if it
+      works, and the risk of why it might fail. Provide exact acceptance checks and a
+      budget_seconds covering every worker turn and check-in; when little time is left, pick a
+      smaller idea rather than stopping. SWITCH requires evidence and a compared alternative.
+      Return BLOCKED only when no useful work of any kind is possible without a human.
 
       You may inspect the app and run baseline checks but may not change code or Git state.
       Return the SUPERVISE result described in stage-results.md.
@@ -93,10 +113,11 @@ tasks:
       until it prints OK: a result that fails this check costs a whole extra stage. Finish with a
       concise summary; no completion marker is needed.
 
-      Read the "What we know" section of .atelier/implementations/index.md before you explore, and
-      rely on it. When you learn something a later agent would otherwise rediscover (a fact about
-      the code or its tools, a pitfall, a decision), add it to `learned` in your result: at most
-      five notes, and only what that section does not already say.
+      Read the "What the owner said" and "What we know" sections of
+      .atelier/implementations/index.md before you explore, and rely on them. When you learn
+      something a later agent would otherwise rediscover (a fact about the code or its tools, a
+      pitfall, a decision), add it to `learned` in your result: at most five notes, and only what
+      "What we know" does not already say.
 
       If request.json contains a recovery error, inspect actual Git state and your existing result.
       Repair that result or finish the same stage. Never repeat committed work or silently choose
@@ -138,7 +159,20 @@ tasks:
       Implement or repair ONLY the active milestone in state.json. Preserve the outcome, acceptance
       criteria, and existing behavior listed in the brief. Multiple focused commits are allowed;
       the complete milestone is reviewed as a range from its recorded base. Do not amend, rewrite,
-      or merge history. On a repair, read the most recent review's concrete findings and resolve
+      or merge history.
+
+      A milestone can take several turns of this one conversation, with the coordinator checking
+      in between them. request.json's `turn` says what this turn is. A probe turn does only the
+      milestone's `probe`, the small test of the way the idea is most likely to fail: do not build
+      yet, and return CHECKPOINT with what you observed. A build turn follows `turn.direction`,
+      the coordinator's last word. In a long milestone, return CHECKPOINT at a natural stopping
+      point instead of pressing on or guessing: when a working slice is committed, when something
+      surprising turns up, or when a decision is not yours to make. Commit what works, say what
+      you did and found, and put a decision you need in `question`; the coordinator answers and
+      this conversation continues. READY means the whole milestone is done. After every turn the
+      controller measures the scorecard itself, so report numbers as you saw them.
+
+      On a repair, read the most recent review's concrete findings and resolve
       them on top of the existing commits; do not restart the work or substitute a new feature.
       A repair is a small job: start from the milestone diff (base..HEAD), the findings and the
       checks already recorded in state.json instead of exploring the project again, and rerun only
@@ -157,7 +191,8 @@ tasks:
       under .atelier/goal/evidence; record reproducible commands for agent workflows. Commit only
       passing, nonempty changes on the current branch. Finish with a clean tree and READY result
       tied to HEAD. If the idea proves unworkable, or a human decision or execution block prevents
-      completion, stop and return BLOCKED: say what you tried, what you observed and why it failed.
+      completion, stop and return BLOCKED: say what you tried, what you observed and why it failed,
+      and name the cause (idea: the hypothesis was wrong; execution: this approach failed; time).
       That is a normal outcome; the controller saves your work under a ref and the run continues.
       Do not misclassify a malformed result as an implementation failure.
 
@@ -172,10 +207,11 @@ tasks:
       until it prints OK: a result that fails this check costs a whole extra stage. Finish with a
       concise summary; no completion marker is needed.
 
-      Read the "What we know" section of .atelier/implementations/index.md before you explore, and
-      rely on it. When you learn something a later agent would otherwise rediscover (a fact about
-      the code or its tools, a pitfall, a decision), add it to `learned` in your result: at most
-      five notes, and only what that section does not already say.
+      Read the "What the owner said" and "What we know" sections of
+      .atelier/implementations/index.md before you explore, and rely on them. When you learn
+      something a later agent would otherwise rediscover (a fact about the code or its tools, a
+      pitfall, a decision), add it to `learned` in your result: at most five notes, and only what
+      "What we know" does not already say.
 
       If request.json contains a recovery error, inspect actual Git state and your existing result.
       Repair that result or finish the same stage. Never repeat committed work or silently choose
@@ -208,6 +244,24 @@ tasks:
     task: |
       You are the independent milestone reviewer.
 
+      The worker has just ended a turn on the active milestone. Its last result is the
+      milestone's `progress`, and `readings` holds the scorecard as the controller measured it
+      after each turn. Look at the actual artifacts and those numbers, not at the worker's account
+      of them.
+
+      If the worker returned CHECKPOINT, you are checking in, as a lead does between two working
+      sessions. Answer its `question` if it asked one, and decide what the milestone's remaining
+      budget is best spent on. CONTINUE hands the same conversation back with your `direction`
+      (what to do next, what to change, the answer to the question) and `turn_seconds` for the
+      next turn and its check-in. It needs budget left: when the budget is used up, keep what is
+      worth keeping with ACCEPT or close the milestone with ABANDON. After a probe, CONTINUE only
+      if the probe did not show the failure the hypothesis feared; if it did, ABANDON now, before
+      the budget is spent. ACCEPT is possible at a checkpoint when what is committed is already
+      worth keeping and the rest is not worth the time left. CONTINUE is also right after READY
+      when the work is sound but the scorecard has not moved as the hypothesis expected and budget
+      remains: say what to try next.
+
+      For ACCEPT, REVISE or ABANDON, review in full.
       Read the active milestone, its implementation evidence, and its entire base..head diff.
       Judge TWO separate questions: does it work correctly and preserve required behavior; and
       does it materially advance the chosen user outcome? Validate the milestone's contribution,
@@ -223,7 +277,10 @@ tasks:
       Score ready_percent: the share of the change you would keep exactly as it is (0-100).
       ACCEPT: demonstrated contribution, reliable, at least 70 percent ready, and no critical
       or high finding. Medium and low issues do not block: list them in notes, and a human reviews
-      them after the run. Required findings must be empty.
+      them after the run. Required findings must be empty. Before you accept, read every judged
+      scorecard outcome yourself by using the result as its user would, and record in `judged`
+      where each one stands and what you observed. Compare the measured readings with what the
+      hypothesis expected, and say in `value` whether the bet paid off.
       REVISE: worthwhile approach with at least one critical or high finding. Rate every issue:
       critical (data loss, a security hole, or the milestone's main path does not work at all),
       high (an acceptance criterion fails, behavior the brief says to preserve broke, a required
@@ -236,7 +293,9 @@ tasks:
       completion criteria, estimate remaining repair plus re-review time, and explain why its
       expected benefit still justifies that cost. Ignore sunk cost.
       ABANDON: weak value, disproven hypothesis, or unjustified repair cost. Explain what was tried,
-      what you observed, why it failed and what the next attempt should learn. Judge the work, not
+      what you observed, why it failed and what the next attempt should learn, and name the
+      cause: idea (the hypothesis was wrong), execution (the idea may hold but this approach
+      failed) or time (the budget ran out before it could be shown). Judge the work, not
       its ambition: a bold idea that works deserves ACCEPT; one that fails is a useful record.
       The controller bounds repairs by the remaining time and configured rounds. Budget exhaustion
       is recorded as DEFERRED, separately from rejecting the idea. Rejected/deferred commits are
@@ -255,10 +314,11 @@ tasks:
       until it prints OK: a result that fails this check costs a whole extra stage. Finish with a
       concise summary; no completion marker is needed.
 
-      Read the "What we know" section of .atelier/implementations/index.md before you explore, and
-      rely on it. When you learn something a later agent would otherwise rediscover (a fact about
-      the code or its tools, a pitfall, a decision), add it to `learned` in your result: at most
-      five notes, and only what that section does not already say.
+      Read the "What the owner said" and "What we know" sections of
+      .atelier/implementations/index.md before you explore, and rely on them. When you learn
+      something a later agent would otherwise rediscover (a fact about the code or its tools, a
+      pitfall, a decision), add it to `learned` in your result: at most five notes, and only what
+      "What we know" does not already say.
 
       If request.json contains a recovery error, inspect actual Git state and your existing result.
       Repair that result or finish the same stage. Never repeat committed work or silently choose
@@ -291,15 +351,20 @@ tasks:
     task: |
       You are the outcome demonstrator.
 
-      Revisit the original baseline and acceptance criteria against the complete accepted branch.
+      Revisit the original baseline and the scorecard against the complete accepted branch.
       Run integrated validation and the actual user path. Report before, after, reproducible evidence,
       measured results when available, and remaining limitations. For UI work include screenshot or
       recording paths; for agent workflows include runnable commands. Describe the branch and actual
       reviewed HEAD; commit counts belong in supporting detail. Do not infer user adoption or speed
       improvements that were never measured. If initial planning was cut short, report PARTIAL.
 
-      ACHIEVED requires evidence for every success criterion. PARTIAL and BLOCKED must explain what
-      is unproven or unfinished. If integrated testing reveals a fixable critical or high problem
+      Read every judged scorecard outcome yourself, on the complete branch, by using the result as
+      its user would, and record in `judged` where each stands and what you observed. The
+      controller takes the final measurements. ACHIEVED requires every judged outcome met and
+      every measured target reached; anything less is PARTIAL. PARTIAL and BLOCKED must explain what
+      is unproven or unfinished. Add `next_run`: what you would do with another run, most valuable
+      first. Add up to three `questions` for the owner, only those whose answers would most change
+      the next run. If integrated testing reveals a fixable critical or high problem
       (the reviewer's scale; list anything lower under limitations),
       return REVISE with a narrowly scoped integration milestone and its repair/review time estimate;
       the controller checks the remaining reserve and a bounded number of integration repairs.
@@ -318,10 +383,11 @@ tasks:
       until it prints OK: a result that fails this check costs a whole extra stage. Finish with a
       concise summary; no completion marker is needed.
 
-      Read the "What we know" section of .atelier/implementations/index.md before you explore, and
-      rely on it. When you learn something a later agent would otherwise rediscover (a fact about
-      the code or its tools, a pitfall, a decision), add it to `learned` in your result: at most
-      five notes, and only what that section does not already say.
+      Read the "What the owner said" and "What we know" sections of
+      .atelier/implementations/index.md before you explore, and rely on them. When you learn
+      something a later agent would otherwise rediscover (a fact about the code or its tools, a
+      pitfall, a decision), add it to `learned` in your result: at most five notes, and only what
+      "What we know" does not already say.
 
       If request.json contains a recovery error, inspect actual Git state and your existing result.
       Repair that result or finish the same stage. Never repeat committed work or silently choose

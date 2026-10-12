@@ -3,11 +3,15 @@
 Move a codebase toward a demonstrated user outcome within a time and usage budget.
 Codex observes, prioritizes, supervises and reviews; Claude Code implements and repairs.
 
-**Observe → compare opportunities → choose an outcome → build → review and repair → demonstrate.**
+**Observe → write a scorecard → place a bet → probe → build with check-ins → review and repair → demonstrate.**
 
-An outcome persists across milestones and multiple focused commits. Acceptance of a milestone
-means it contributes useful, reliable behavior; only the final user-path demonstration can
-establish that the complete outcome was achieved.
+The director turns the goal into a scorecard and the controller measures it, so progress is a
+reading, not a count of accepted milestones. Work is done as a few large bets, each with a
+hypothesis, a time budget and a check-in after every worker turn. An outcome persists across
+milestones and multiple focused commits. Acceptance of a milestone means it contributes useful,
+reliable behavior; only the final demonstration against the scorecard can establish that the
+complete outcome was achieved. The report says what moved the scorecard, what did not and why,
+and where the time went.
 
 A run works like a person given the whole time slot: it keeps going until the time is used and
 never finishes early. It prefers bold ideas; a failed attempt is saved and logged with why it
@@ -56,9 +60,10 @@ Choose the finishing reserve for the project's risk and run length. The supervis
 finish early or lower your reserve or usage floors: the final demonstration starts only when
 the reserve arrives. A milestone too big for the time left is refused and the supervisor picks
 a smaller one. Planning time counts against
-the same deadline. A milestone estimate includes implementation and review and must fit before
-the finishing reserve. A repair must leave a final handoff allowance (5% of the run, capped at
-five minutes). These estimates are planning constraints, not guarantees of agent speed.
+the same deadline. A milestone's budget covers all of its worker turns and check-ins, is counted
+in agent time, and must fit before the finishing reserve. A repair must leave a final handoff
+allowance (5% of the run, capped at five minutes). These budgets are planning constraints, not
+guarantees of agent speed.
 
 Usage is checked before every stage. New feature work requires the configured extra headroom;
 reviews, repairs and demonstrations may use that buffer, while still respecting the original
@@ -103,11 +108,17 @@ reloaded starts a new one and continues from them.
 
 1. **Observe and compare.** Codex inspects the actual user experience, records reproducible
    baseline steps, failures or measurements, states assumptions, and defines success and
-   preserved behavior. It normally compares three to five opportunities (at least two credible
-   alternatives), ranked by upside: how much better the experience gets if the idea works.
-   Uncertainty is a reason to try, not to skip. It selects a primary and fallback and explains
-   why the primary deserves the time. Research into competitors and the best products in the
-   space is used when it sharpens an idea or reveals a bolder one.
+   preserved behavior. It writes the **scorecard**: one to six outcomes that say what progress
+   means for this goal. A measured outcome is a read-only command that prints one number; the
+   controller runs it at the start, after every worker turn and at the end, so no agent reports
+   its own numbers. A judged outcome is read by the director using the result as its user would;
+   at least one is required, so a number alone cannot stand for the goal. It normally compares
+   three to five opportunities (at least two credible alternatives), ranked by gain: how far the
+   scorecard moves if the idea works. Uncertainty is a reason to try, not to skip. It selects a
+   primary and fallback and explains why the primary deserves the time. Research into competitors
+   and the best products in the space is used when it sharpens an idea or reveals a bolder one.
+   Your verdicts on earlier runs, under "What the owner said" in the shared index, weigh on the
+   choice.
 2. **Maintain the outcome.** The brief, priority and milestones persist across stage sessions.
    Codex consults shared accepted, abandoned and unfinished history, checking which changes
    actually exist on the branch. Every stage can also report up to five notes (a fact about the
@@ -115,15 +126,22 @@ reloaded starts a new one and continues from them.
    the shared index, which every agent reads before exploring, so later agents do not rediscover
    them. A note taken on work that was rolled back stays, marked as unverified. A changed brief requires an explicit evidence-backed replan;
    the earlier brief remains in the event log. New ideas can be added at every checkpoint; when
-   the brief's criteria are met or only polish is left, Codex raises the bar with bolder ones.
-   Parts of the goal nobody has tried come before polish. At checkpoints Codex chooses to build,
-   simplify or switch. Each milestone states its ambition (bold, normal or polish), its upside,
-   why it might fail, and which accepted milestones it builds on.
-3. **Build a coherent milestone.** Claude implements across as many files and focused commits
-   as the milestone needs. The scope is the smallest independently useful experience that
-   advances the outcome, with specific acceptance checks. Small fixes are appropriate when
-   they unblock or complete that experience. Multiple commits must extend the recorded base
-   without merges or rewritten history. Journal files must never enter Git history.
+   the scorecard's targets are reached or only polish is left, Codex raises the bar with bolder
+   ones. Parts of the goal nobody has tried come before polish. At checkpoints Codex chooses to
+   build, simplify or switch. Each milestone is a **bet**: it states its ambition (bold, normal
+   or polish), its upside, why it might fail, which accepted milestones it builds on, and a
+   hypothesis: the action, the scorecard outcome it should move, from what to what, and why.
+   Its time budget is sized to the expected gain and may span several worker turns, so large
+   moves are possible.
+3. **Probe, then build with check-ins.** Anything larger than polish starts with a probe: a few
+   minutes of work that tests the way the idea is most likely to fail. Claude's first turn does
+   only that. Then Claude implements across as many files, commits and turns as the budget
+   allows, ending a turn with a checkpoint at a natural stopping point or when a decision is
+   not its own. After every turn the controller measures the scorecard, and Codex checks in:
+   it looks at the actual work and the readings, answers the question, and either hands the
+   conversation back with a direction, accepts what is worth keeping, or closes the bet. A
+   failed probe closes it before the budget is spent. Multiple commits must extend the recorded
+   base without merges or rewritten history. Journal files must never enter Git history.
 4. **Review value and correctness separately.** Codex inspects the complete milestone diff and
    independently checks its user benefit and reliability. Checks match risk and scope; broader
    validation happens at integration points. Commands, results and elapsed time are recorded.
@@ -141,8 +159,9 @@ reloaded starts a new one and continues from them.
    A repair and its re-review start from the milestone diff and the findings, not a new
    exploration of the project; ABANDON records weak value, a disproven hypothesis or
    unjustified repair cost, with what was learned. If Claude finds the idea unworkable it returns
-   BLOCKED with what it tried and saw. Repair has both a count and time budget. Exhaustion
-   becomes DEFERRED, separately from a judgment that the idea was bad. None of these end the
+   BLOCKED with what it tried and saw. Work that is not kept names its cause: the idea was
+   wrong, the execution failed, or the time ran out. Repair has both a count and time budget.
+   Exhaustion becomes DEFERRED, separately from a judgment that the idea was bad. None of these end the
    run: the supervisor chooses the next idea. Before rolling back an abandoned, deferred or
    blocked implementation, its commits and any uncommitted attempt are preserved under
    `refs/automatic-goal/<run-id>/<milestone-id>`. Only that milestone is reset; earlier accepted
@@ -151,11 +170,22 @@ reloaded starts a new one and continues from them.
    branch, runs integrated checks, records before/after evidence, and reports limitations.
    UI work calls for screenshots or recordings; agent workflows call for reproducible commands.
    Narrow integration repairs can use the finishing reserve, with their own bounded count.
-   ACHIEVED requires evidence for every success criterion. PARTIAL and BLOCKED state what remains
-   unproven. Neither a passing test suite nor exhausted time implies achievement or adoption.
-7. **You pick.** Accepted milestones stack on the goal branch. The report lists each one with
-   the reviewer's notes, what it builds on, and a `git cherry-pick <base>..<head>` command to
-   take only that milestone. Failed and deferred ideas list their saved ref and why.
+   The controller takes the final measurements and Codex reads every judged outcome itself.
+   ACHIEVED requires every judged outcome met and every measured target reached. PARTIAL and
+   BLOCKED state what remains unproven. Neither a passing test suite nor exhausted time implies
+   achievement or adoption.
+7. **You pick, and you steer the next run.** Accepted milestones stack on the goal branch. The
+   report opens with the scorecard, before and after, so you can see what the run took the goal
+   to mean. It lists each accepted milestone with its bet, what its outcome read before and
+   after, the reviewer's notes, what it builds on, and a `git cherry-pick <base>..<head>`
+   command to take only that milestone. Ideas that were not kept list their cause, their saved
+   ref and why. It ends with where the time went, what the director would do with another run,
+   and at most three questions for you. Record your verdict so the next run learns your taste:
+
+   ```sh
+   python3 .atelier/conduits/goal_iteration/scripts/memory.py feedback 0016 discard "I wanted labels before a model"
+   python3 .atelier/conduits/goal_iteration/scripts/memory.py feedback - note "Finish the layout before any new experiment"
+   ```
 
 ## Durable state and recovery
 
@@ -171,6 +201,7 @@ The main checkout holds shared, local-only records:
 .atelier/implementations/
   index.md                   # what agents learned, milestone history and links to run handoffs
   notes.jsonl                # the notes behind "What we know"; delete a line to retire a note
+  feedback.jsonl             # your verdicts behind "What the owner said"; delete a line to retire one
   0001.md                    # hypothesis, contribution, implementation and reviews
   runs/<run-id>/
     state.json               # canonical brief, milestones, decisions and timestamps
@@ -186,6 +217,10 @@ links to its current run. A second unfinished run in that worktree is refused. R
 stored in the parent flow's outputs, so a report for an older run does not accidentally show
 the newest run's brief. State writes use atomic replacement. Records and abandoned commit refs
 survive worktree deletion but are local: Git pushes do not transfer the journals or these refs.
+On Windows, Git deletes through directory links, so a plain `git worktree remove` would erase the
+shared history. The run therefore locks its worktree; before removing it, run
+`python3 .atelier/conduits/goal_iteration/scripts/memory.py detach` in it, which removes only
+the links and unlocks it. Never force past the lock with `--force --force`.
 Back them up separately. Raw flow logs remain under their originating worktree's `.atelier/flows`.
 
 Final chat formatting is not a control protocol. A valid stage JSON result is accepted regardless
