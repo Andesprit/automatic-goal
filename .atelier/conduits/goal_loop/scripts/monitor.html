@@ -12,7 +12,7 @@
 <label for="runs">Session</label><select id="runs" aria-label="Session"></select>
 <p id="empty-state" hidden>No saved sessions found for this project.</p>
 <main id="main" hidden>
-<section id="overview"><div class="meta"><span id="status"></span><span id="elapsed"></span><span id="date"></span></div><h2 id="goal"></h2><p id="headline"></p><p id="next" hidden></p></section>
+<section id="overview"><div class="meta"><span id="status"></span><span id="elapsed"></span><span id="date"></span></div><h2 id="goal"></h2><p id="headline"></p><p id="next" hidden></p><ul id="scorecard" class="evidence-list"></ul></section>
 <section class="work"><h2>Done this session</h2><ul id="done"></ul><p id="done-empty" class="empty" hidden>No reviewed improvements recorded yet.</p></section>
 <section id="open-section" class="work" hidden><h2>Still open</h2><ul id="pending"></ul><ul id="remaining"></ul></section>
 <details id="proof"><summary>Evidence &amp; validation</summary><h3>Before</h3><p id="before"></p><h3>After</h3><p id="after"></p><ul id="evidence" class="evidence-list"></ul><div id="reviews"></div></details>
@@ -37,12 +37,13 @@ function draw(){
  const s=run.summary,state=run.outcome;
  el('status').textContent=s.status;el('elapsed').textContent=s.elapsed;el('date').textContent=date(run.started);
  el('goal').textContent=run.goal;el('headline').textContent=s.headline;
+ list('scorecard',(s.scorecard||[]).map(r=>`${r.outcome}: ${r.before} → ${r.after}${r.target?` (target ${r.target})`:''}`));
  el('next').hidden=!s.next;el('next').textContent=s.next?'Current focus: '+s.next:'';
  list('done',s.done);el('done-empty').hidden=!!s.done.length;
  el('open-section').hidden=!s.pending.length&&!s.remaining.length;list('pending',s.pending);list('remaining',s.remaining);
  el('before').textContent=s.before||'Starting experience not recorded.';el('after').textContent=s.after||'Final demonstration not recorded.';list('evidence',s.evidence);
  el('explored-section').hidden=!s.abandoned.length;el('explored-label').textContent=`Explored, not kept (${s.abandoned.length})`;list('abandoned',s.abandoned);
- records('reviews',(state?.milestones||[]).map(m=>({id:m.id,title:m.title,text:(m.reviews||[]).map(r=>`${r.verdict}: ${r.reason}\nCorrectness: ${r.correctness}\nValue: ${r.value}\n${r.evidence.join('\n')}\n${r.findings.join('\n')}\n${(r.notes||[]).join('\n')}`).join('\n\n')||'No review recorded.'})));
+ records('reviews',(state?.milestones||[]).map(m=>({id:m.id,title:m.title,text:(m.reviews||[]).map(r=>`${r.verdict}: ${r.reason}\n${r.verdict==='CONTINUE'?'Direction: '+r.direction:'Correctness: '+r.correctness+'\nValue: '+r.value}\n${r.evidence.join('\n')}\n${(r.findings||[]).join('\n')}\n${(r.notes||[]).join('\n')}`).join('\n\n')||'No review recorded.'})));
  const meta={'Branch':s.branch||'Not recorded','Runner':run.status,'Outcome':s.status,'Session':run.name,...run.counts};
  el('metadata').replaceChildren(...Object.entries(meta).flatMap(([key,value])=>{const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=key;dd.textContent=value;return[dt,dd]}));
  el('usage').textContent=run.usage;el('sample').textContent=`Sampled ${date(run.usage_tick_started)}. A saved status is not a process health check.`;

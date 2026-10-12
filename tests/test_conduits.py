@@ -23,26 +23,42 @@ GIT_ENV = {**os.environ, 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_SYSTEM': 
            'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@t',
            'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS': '1'}
 CHECK = {'command': 'test -f b.txt', 'exit_code': 0, 'summary': 'user path works', 'duration_seconds': .1}
+JUDGED = [{'id': 'first-run', 'state': 'met', 'evidence': 'Followed the first run to the end'}]
+SCORECARD = [
+    {'id': 'first-run', 'outcome': 'A new user finishes the first run unaided', 'kind': 'judged',
+     'how': 'Follow the first run as a new user', 'baseline': 'The second step fails'},
+    {'id': 'files', 'outcome': 'Workflow files present', 'kind': 'measured',
+     'command': 'ls *.txt | wc -l', 'unit': 'files', 'direction': 'up', 'target': 2}]
 BRIEF = {
     'goal_interpretation': 'Make the first workflow useful', 'outcome': 'A useful first result unaided',
-    'baseline': ['Two manual steps; second currently fails'], 'success_criteria': ['First run succeeds'],
+    'baseline': ['Two manual steps; second currently fails'], 'scorecard': SCORECARD,
     'preserve': ['Existing login'], 'assumptions': [],
     'opportunities': [dict(id=n, title=n, benefit='fewer steps', evidence='observed failure',
                            effort='one short milestone', uncertainty='needs integration check')
                       for n in ('onboarding', 'diagnostics', 'docs')],
     'primary': 'onboarding', 'fallback': 'diagnostics',
     'selection_reason': 'It removes the first-run blocker', 'research': 'Actual failure reproduced; no external research needed'}
+HYPOTHESIS = {'action': 'Adding the missing workflow file', 'outcome': 'first-run',
+              'expected': 'from failing at the second step to finishing', 'because': 'the second step reads that file',
+              'failure_mode': 'The runner may reject the file'}
+# A small single-turn milestone; BET below is the multi-turn kind that starts with a probe.
 MILESTONE = {'title': 'First useful workflow', 'opportunity': 'onboarding', 'benefit': 'Unblocks new users',
-             'ambition': 'bold', 'upside': 'New users succeed alone', 'risk': 'The runner may not allow it',
+             'ambition': 'polish', 'upside': 'New users succeed alone', 'risk': 'The runner may not allow it',
+             'hypothesis': HYPOTHESIS,
              'acceptance': ['First run succeeds'], 'scope': ['b.txt'], 'checks': ['test -f b.txt'],
-             'estimated_seconds': 10}
+             'budget_seconds': 10}
+BET = {**MILESTONE, 'ambition': 'bold', 'probe': 'Feed the runner an empty workflow file and see whether it accepts it',
+       'budget_seconds': 600}
 SUPERVISE = {'action': 'BUILD', 'brief': BRIEF, 'reason': 'Highest observed benefit',
              'learning': 'Reproduced the initial failure', 'priority': 'First run', 'milestone': MILESTONE}
 REVIEW = {'verdict': 'ACCEPT', 'ready_percent': 90, 'correctness': 'Checks pass', 'value': 'First run no longer fails',
-          'reason': 'Demonstrated useful contribution', 'evidence': ['test -f b.txt'], 'checks': [CHECK], 'findings': []}
+          'reason': 'Demonstrated useful contribution', 'evidence': ['test -f b.txt'], 'checks': [CHECK], 'findings': [],
+          'judged': JUDGED}
+CONTINUE = {'verdict': 'CONTINUE', 'reason': 'The probe passed and budget remains', 'direction': 'Build the file now',
+            'turn_seconds': 60, 'evidence': ['Read the probe output']}
+PROBED = {'status': 'CHECKPOINT', 'summary': 'The runner accepts an empty workflow file', 'evidence': ['runner exit 0']}
 FINAL = {'status': 'ACHIEVED', 'before': 'First run failed', 'after': 'First run succeeds',
-         'evidence': ['Run test -f b.txt'], 'checks': [CHECK],
-         'criteria': [{'criterion': 'First run succeeds', 'met': True, 'evidence': 'First-run command succeeds'}],
+         'evidence': ['Run test -f b.txt'], 'checks': [CHECK], 'judged': JUDGED,
          'limitations': [], 'remaining': [], 'reason': 'Baseline comparison demonstrates the outcome'}
 USAGE_STUB = '''import json, os
 from pathlib import Path
@@ -270,7 +286,8 @@ class Outcomes(Repo):
     def test_abandon_preserves_ref_and_restores_only_current_milestone(self):
         self.build()
         head = git(self.wt, 'rev-parse', 'HEAD')
-        self.result({**REVIEW, 'verdict': 'ABANDON', 'reason': 'Hypothesis disproven'})
+        self.assertEqual(self.result({**REVIEW, 'verdict': 'ABANDON', 'reason': 'Hypothesis disproven'}), 'RECOVER')
+        self.result({**REVIEW, 'verdict': 'ABANDON', 'reason': 'Hypothesis disproven', 'cause': 'idea'})
         state = self.state()
         self.assertEqual(git(self.wt, 'rev-parse', 'HEAD'), self.base)
         self.assertEqual(git(self.wt, 'rev-parse', state['milestones'][0]['checkpoint_ref']), head)
@@ -318,7 +335,7 @@ class Outcomes(Repo):
         self.route('IMPLEMENT')
         self.commit('c.txt')
         (self.wt / 'b.txt').write_text('unfinished')
-        self.result({'status': 'BLOCKED', 'reason': 'The runner rejects it: observed error X'})
+        self.result({'status': 'BLOCKED', 'reason': 'The runner rejects it: observed error X', 'cause': 'execution'})
         state = self.state()
         item = state['milestones'][0]
         self.assertEqual((state['status'], state['phase'], item['status']), ('ACTIVE', 'SUPERVISE', 'BLOCKED'))
@@ -336,7 +353,7 @@ class Outcomes(Repo):
         self.route()
         self.result(SUPERVISE)
         self.route('IMPLEMENT')
-        self.result({'status': 'BLOCKED', 'reason': 'Needs a product decision'})
+        self.result({'status': 'BLOCKED', 'reason': 'Needs a product decision', 'cause': 'idea'})
         item = self.state()['milestones'][0]
         self.assertEqual(item['status'], 'BLOCKED')
         self.assertNotIn('checkpoint_ref', item)
@@ -400,7 +417,7 @@ class Outcomes(Repo):
     def test_agent_can_check_its_result_without_changing_anything(self):
         self.init()
         self.route('SUPERVISE')
-        self.write({**SUPERVISE, 'milestone': {**MILESTONE, 'estimated_seconds': 99999}})
+        self.write({**SUPERVISE, 'milestone': {**MILESTONE, 'budget_seconds': 99999}})
         r = self.cmd('check')
         self.assertEqual(r.returncode, 1)
         self.assertIn('INVALID', r.stdout)
@@ -425,7 +442,7 @@ class Outcomes(Repo):
         self.assertEqual(self.cmd('apply').stdout, 'CONTINUE')
         self.route('REVIEW')
         head = git(self.wt, 'rev-parse', 'HEAD')
-        self.write({**REVIEW, 'verdict': 'ABANDON'})
+        self.write({**REVIEW, 'verdict': 'ABANDON', 'cause': 'idea'})
         self.assertEqual(self.cmd('check').returncode, 0)
         self.assertEqual(git(self.wt, 'rev-parse', 'HEAD'), head)
         self.assertEqual(git(self.wt, 'for-each-ref', 'refs/automatic-goal'), '')
@@ -468,22 +485,48 @@ class Outcomes(Repo):
         self.assertEqual(index.count('The suite needs FOO=1'), 1)
         self.assertIn('- **fact** b.txt drives the first run — read b.txt\n', index)
         self.route('REVIEW')
-        self.result({**REVIEW, 'verdict': 'ABANDON'})
+        self.result({**REVIEW, 'verdict': 'ABANDON', 'cause': 'idea'})
         index = (self.main / '.atelier/implementations/index.md').read_text()
         # A note taken on work that was rolled back may describe code that no longer exists.
         self.assertIn('read b.txt (seen on work that was not kept; verify first)', index)
         self.assertIn('- **pitfall** The suite needs FOO=1 — make test fails without it\n', index)
 
-    def test_final_achievement_requires_every_success_criterion(self):
+    def test_final_achievement_requires_every_scorecard_outcome(self):
         self.build()
         self.result(REVIEW)
         self.time_up()
         self.route('FINALIZE')
-        self.assertEqual(self.result({**FINAL, 'criteria': []}), 'RECOVER')
+        partly = [{**JUDGED[0], 'state': 'partial'}]
+        self.assertEqual(self.result({**FINAL, 'judged': partly}), 'RECOVER')
+        self.assertIn('not there yet: first-run', self.state()['reason'])
         self.assertEqual(self.state()['status'], 'ACTIVE')
-        self.assertEqual(self.result({**FINAL, 'status': 'PARTIAL', 'criteria': 'malformed'}), 'RECOVER')
-        self.result({**FINAL, 'status': 'PARTIAL', 'remaining': ['First run not demonstrated']})
+        self.assertEqual(self.result({**FINAL, 'status': 'PARTIAL', 'judged': 'malformed'}), 'RECOVER')
+        self.result({**FINAL, 'status': 'PARTIAL', 'judged': partly, 'remaining': ['First run not demonstrated']})
         self.assertEqual(self.state()['status'], 'PARTIAL')
+        self.assertEqual(self.state()['judged']['first-run']['state'], 'partial')
+
+    def test_a_missed_measured_target_is_not_achievement(self):
+        self.init()
+        self.route()
+        card = [SCORECARD[0], {**SCORECARD[1], 'target': 5}]
+        self.result({**SUPERVISE, 'brief': {**BRIEF, 'scorecard': card}})
+        self.route('IMPLEMENT')
+        self.commit()
+        self.result({'status': 'READY', 'summary': 'Working path', 'checks': [CHECK], 'evidence': ['b.txt']})
+        self.route('REVIEW')
+        self.result(REVIEW)
+        self.time_up()
+        self.route('FINALIZE')
+        self.assertEqual(self.result(FINAL), 'RECOVER')
+        self.assertIn('not there yet: files', self.state()['reason'])
+        self.result({**FINAL, 'status': 'PARTIAL', 'next_run': ['Add the three missing workflow files'],
+                     'questions': ['Is five files still the right target?']})
+        state = self.state()
+        self.assertEqual(state['scorecard']['final']['values'], {'files': 2})
+        handoff = (self.wt / '.atelier/goal/handoff.md').read_text()
+        self.assertIn('| Workflow files present | 1 files | 2 files | 5 files |', handoff)
+        self.assertIn('Add the three missing workflow files', handoff)
+        self.assertIn('Is five files still the right target?', handoff)
 
     def test_integration_findings_get_bounded_repair_in_reserve(self):
         self.build()
@@ -559,7 +602,7 @@ class Budgets(Repo):
     def test_estimate_must_fit_feature_budget(self):
         self.init()
         self.route()
-        self.result({**SUPERVISE, 'milestone': {**MILESTONE, 'estimated_seconds': 4000}})
+        self.result({**SUPERVISE, 'milestone': {**MILESTONE, 'budget_seconds': 4000}})
         self.assertEqual(self.state()['phase'], 'SUPERVISE')
         self.assertEqual(self.state()['milestones'], [])
         self.assertIn('choose a smaller one', self.state()['reason'])
@@ -592,6 +635,201 @@ class Budgets(Repo):
         self.assertEqual(git(self.wt, 'rev-parse', 'HEAD'), self.base)
 
 
+class Scorecards(Repo):
+    def brief(self, *card):
+        return {**SUPERVISE, 'brief': {**BRIEF, 'scorecard': list(card)}}
+
+    def test_controller_takes_the_baseline_itself(self):
+        self.init()
+        self.route()
+        self.result(SUPERVISE)
+        state = self.state()
+        self.assertEqual(state['scorecard']['baseline']['values'], {'files': 1})
+        self.assertEqual(state['milestones'][0]['before'], {'files': 1})
+        self.assertIn('| Workflow files present | 1 files | 1 files | 2 files |',
+                      (self.wt / '.atelier/goal/handoff.md').read_text())
+
+    def test_scorecard_needs_a_judged_outcome_and_working_commands(self):
+        self.init()
+        self.route()
+        self.assertEqual(self.result(self.brief(SCORECARD[1])), 'RECOVER')
+        self.assertIn('judged outcome', self.state()['reason'])
+        self.assertEqual(self.result(self.brief(SCORECARD[0], {**SCORECARD[1], 'command': 'echo many'})), 'RECOVER')
+        self.assertIn('files:', self.state()['reason'])
+        self.route('SUPERVISE')
+        self.result(SUPERVISE)
+        self.assertEqual(self.state()['phase'], 'IMPLEMENT')
+
+    def test_a_failing_command_goes_back_to_its_author(self):
+        self.init()
+        self.route()
+        self.assertEqual(self.result(self.brief(SCORECARD[0], {**SCORECARD[1], 'command': 'exit 3'})), 'RECOVER')
+        self.assertIn('exit code 3', self.state()['reason'])
+        self.assertIsNone(self.state()['brief'])
+
+    def test_a_command_that_changes_the_worktree_is_refused_and_undone(self):
+        self.init()
+        self.route()
+        messy = {**SCORECARD[1], 'command': 'echo x > junk.txt; echo changed > a.txt; echo 1'}
+        self.assertEqual(self.result(self.brief(SCORECARD[0], messy)), 'RECOVER')
+        self.assertIn('changed the worktree', self.state()['reason'])
+        self.assertFalse((self.wt / 'junk.txt').exists())
+        self.assertEqual((self.wt / 'a.txt').read_text(), 'a\n')
+        self.route('SUPERVISE')
+        self.result(SUPERVISE)
+        self.assertEqual(self.state()['phase'], 'IMPLEMENT')
+
+    def test_acceptance_needs_the_coordinators_own_judgement(self):
+        self.build()
+        self.assertEqual(self.result({**REVIEW, 'judged': []}), 'RECOVER')
+        self.assertIn('first-run', self.state()['reason'])
+        self.assertEqual(self.result({**REVIEW, 'judged': [{**JUDGED[0], 'state': 'great'}]}), 'RECOVER')
+        self.result(REVIEW)
+        self.assertEqual(self.state()['milestones'][0]['status'], 'ACCEPT')
+
+    def test_accepted_work_moves_the_scorecard(self):
+        self.build()
+        self.assertEqual(self.result({**REVIEW, 'judged': [{**JUDGED[0], 'id': 'files'}]}), 'RECOVER')
+        self.result({**REVIEW, 'judged': [{**JUDGED[0], 'state': 'partial'}]})
+        state = self.state()
+        self.assertEqual(state['scorecard']['latest']['values'], {'files': 2})
+        self.assertEqual(state['judged']['first-run']['state'], 'partial')
+        handoff = (self.wt / '.atelier/goal/handoff.md').read_text()
+        self.assertIn('Judged: A new user finishes the first run unaided: Partly met', handoff)
+        self.assertIn('| A new user finishes the first run unaided | The second step fails | Partly met: '
+                      'Followed the first run to the end |  |', handoff)
+
+
+class Bets(Repo):
+    def start(self, **changes):
+        self.init()
+        self.route('SUPERVISE')
+        self.result({**SUPERVISE, 'milestone': {**BET, **changes}})
+        self.route('IMPLEMENT')
+
+    def request(self):
+        return json.loads((self.wt / '.atelier/goal/request.json').read_text())
+
+    def test_larger_milestones_state_a_hypothesis_and_a_probe(self):
+        self.init()
+        self.route()
+        without = {key: value for key, value in BET.items() if key != 'probe'}
+        self.assertEqual(self.result({**SUPERVISE, 'milestone': without}), 'RECOVER')
+        self.assertIn('probe', self.state()['reason'])
+        wrong = {**BET, 'hypothesis': {**HYPOTHESIS, 'outcome': 'speed'}}
+        self.assertEqual(self.result({**SUPERVISE, 'milestone': wrong}), 'RECOVER')
+        self.assertIn('scorecard id', self.state()['reason'])
+        self.route('SUPERVISE')
+        self.result({**SUPERVISE, 'milestone': BET})
+        self.assertEqual(self.state()['phase'], 'IMPLEMENT')
+
+    def test_probe_then_steered_turns_then_acceptance(self):
+        self.start()
+        self.assertEqual(self.request()['turn']['kind'], 'probe')
+        self.commit()
+        ready = {'status': 'READY', 'summary': 'Whole workflow', 'checks': [CHECK], 'evidence': ['b.txt']}
+        self.assertEqual(self.result(ready), 'RECOVER')
+        self.assertIn('probe', self.state()['reason'])
+        git(self.wt, 'reset', '-q', '--hard', self.base)
+        self.route('IMPLEMENT')
+        self.result(PROBED)
+        self.assertEqual(self.state()['milestones'][0]['status'], 'CHECKPOINT')
+        self.route('REVIEW')
+        self.result(CONTINUE)
+        self.route('IMPLEMENT')
+        turn = self.request()['turn']
+        self.assertEqual((turn['kind'], turn['number'], turn['direction']), ('build', 2, 'Build the file now'))
+        self.assertLessEqual(turn['budget_left_seconds'], 600)
+        self.commit()
+        self.result({'status': 'CHECKPOINT', 'summary': 'First file works', 'evidence': ['b.txt'],
+                     'question': 'Should the second file reuse the login?'})
+        self.assertEqual(self.state()['milestones'][0]['readings'][-1]['values'], {'files': 2})
+        self.route('REVIEW')
+        self.result({**CONTINUE, 'direction': 'Yes, reuse the login'})
+        self.route('IMPLEMENT')
+        self.commit('c.txt')
+        self.result({**ready, 'evidence': ['b.txt and c.txt']})
+        self.route('REVIEW')
+        self.result(REVIEW)
+        state = self.state()
+        item = state['milestones'][0]
+        self.assertEqual((item['status'], item['turns'], item['revisions'], len(item['reviews'])), ('ACCEPT', 3, 0, 3))
+        self.assertEqual(state['scorecard']['latest']['values'], {'files': 3})
+        self.assertGreater(item['spent_seconds'], 0)
+        handoff = (self.wt / '.atelier/goal/handoff.md').read_text()
+        self.assertIn('Bet: Adding the missing workflow file should move "A new user finishes the first run '
+                      'unaided" (from failing at the second step to finishing), because the second step reads that file',
+                      handoff)
+        self.assertIn('First useful workflow: ', handoff.split('### Where the time went')[1])
+        self.assertIn('over 3 worker turns', handoff)
+        self.assertIn('Direction: Yes, reuse the login', handoff)
+
+    def test_a_failed_probe_closes_the_bet_and_names_the_cause(self):
+        self.start()
+        self.result({**PROBED, 'summary': 'The runner rejects every workflow file'})
+        self.route('REVIEW')
+        self.assertEqual(self.result(REVIEW), 'RECOVER')
+        self.assertIn('nothing to ACCEPT', self.state()['reason'])
+        self.result({**REVIEW, 'verdict': 'ABANDON', 'reason': 'The probe showed the runner cannot load it',
+                     'cause': 'idea', 'judged': []})
+        state = self.state()
+        item = state['milestones'][0]
+        self.assertEqual((item['status'], item['cause'], state['phase']), ('ABANDON', 'idea', 'SUPERVISE'))
+        self.assertNotIn('checkpoint_ref', item)
+        self.assertIn('**First useful workflow** (Wrong idea)', (self.wt / '.atelier/goal/handoff.md').read_text())
+        self.assertIn('Wrong idea. The probe showed', (self.wt / '.atelier/implementations/0001.md').read_text())
+        self.route('SUPERVISE')
+
+    def test_turns_stop_at_the_budget_and_at_the_feature_time(self):
+        self.start(budget_seconds=100)
+        self.result(PROBED)
+        self.route('REVIEW')
+        self.assertEqual(self.result({**CONTINUE, 'turn_seconds': 500}), 'RECOVER')
+        self.assertIn('budget is used up', self.state()['reason'])
+        self.set_state(finish_at=time.time() + 30)
+        self.assertEqual(self.result(CONTINUE), 'RECOVER')
+        self.assertIn('does not fit', self.state()['reason'])
+        self.set_state(finish_at=time.time() + 3000)
+        self.route('REVIEW')
+        self.result(CONTINUE)
+        self.assertEqual(self.state()['phase'], 'IMPLEMENT')
+
+    def test_a_steered_turn_that_no_longer_fits_keeps_its_commits_under_a_ref(self):
+        self.start()
+        self.commit()
+        head = git(self.wt, 'rev-parse', 'HEAD')
+        self.result({**PROBED, 'summary': 'Probe passed and the first file is in'})
+        self.route('REVIEW')
+        self.result(CONTINUE)
+        self.set_state(finish_at=time.time() + 5)
+        self.route('SUPERVISE')
+        item = self.state()['milestones'][0]
+        self.assertEqual((item['status'], item['cause']), ('DEFERRED', 'time'))
+        self.assertEqual(git(self.wt, 'rev-parse', item['checkpoint_ref']), head)
+        self.assertEqual(git(self.wt, 'rev-parse', 'HEAD'), self.base)
+
+
+class OwnerFeedback(Repo):
+    def memory(self, *args):
+        return subprocess.run([sys.executable, str(self.scripts / 'memory.py'), *args],
+                              cwd=self.wt, env=GIT_ENV, capture_output=True, text=True)
+
+    def test_the_owners_verdict_reaches_the_next_run(self):
+        self.build()
+        self.result(REVIEW)
+        r = self.memory('feedback', '0001', 'discard', 'I wanted the login reused, not a new file')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.memory('feedback', '-', 'note', 'Bigger moves, less bookkeeping').returncode, 0)
+        index = (self.main / '.atelier/implementations/index.md').read_text()
+        said = index.split('## What the owner said')[1].split('## What we know')[0]
+        self.assertIn('- **discard** [0001](0001.md) — I wanted the login reused, not a new file', said)
+        self.assertIn('- **note** Bigger moves, less bookkeeping', said)
+        for bad in (('9999', 'keep', 'why'), ('0001', 'love', 'why'), ('-', 'keep', 'why'), ('0001', 'keep', ' ')):
+            self.assertNotEqual(self.memory('feedback', *bad).returncode, 0)
+        self.assertIn('memory.py feedback <id> keep|discard', (self.wt / '.atelier/goal/handoff.md').read_text())
+        self.assertIn('Id: 0001', (self.wt / '.atelier/goal/handoff.md').read_text())
+
+
 class SharedHistory(Repo):
     def test_legacy_decisions_and_outcomes_survive_worktree_removal(self):
         docs = self.wt / '.atelier/implementations'
@@ -605,8 +843,18 @@ class SharedHistory(Repo):
         self.assertIn('Legacy experiment', index)
         self.assertIn('DISCARD', index)
         self.assertIn(first_id, index)
-        git(self.main, 'worktree', 'remove', '--force', str(self.wt))
         shared = self.main / '.atelier/implementations'
+        # Git deletes through a Windows junction, so a linked worktree must refuse plain removal.
+        plain = subprocess.run(['git', 'worktree', 'remove', '--force', str(self.wt)], cwd=self.main,
+                               env=GIT_ENV, capture_output=True, text=True)
+        self.assertTrue((shared / 'runs' / first_id / 'state.json').exists())
+        if plain.returncode:
+            self.assertIn('memory.py detach', plain.stderr)
+            detach = subprocess.run([sys.executable, str(self.scripts / 'memory.py'), 'detach'],
+                                    cwd=self.wt, env=GIT_ENV, capture_output=True, text=True)
+            self.assertEqual(detach.returncode, 0, detach.stderr)
+            self.assertFalse((self.wt / '.atelier/implementations').exists())
+            git(self.main, 'worktree', 'remove', '--force', str(self.wt))
         self.assertTrue((shared / 'runs' / first_id / 'state.json').exists())
         self.assertTrue((shared / '0001.md').exists())
         git(self.main, 'worktree', 'add', '-q', str(self.wt), '-b', 'fresh')
@@ -677,6 +925,26 @@ class NativeLoop(Repo):
         self.assertEqual(len(set().union(*codex)), 1)
         self.assertTrue(all(codex))
         self.assertNotEqual(claude, codex[0])
+
+    def test_native_bet_probes_checks_in_and_builds_in_one_worker_conversation(self):
+        self.script('supervisor', [('true', {**SUPERVISE, 'milestone': BET}), (self.EXPIRE, SUPERVISE)])
+        self.script('claude', [
+            ('true', PROBED),
+            ("printf b > b.txt\ngit add b.txt\ngit commit -qm build",
+             {'status':'READY','summary':'Built after the probe','checks':[CHECK],'evidence':['b.txt']})])
+        self.script('codex', [('true', CONTINUE), ('test -f b.txt', REVIEW)])
+        self.script('finalizer', [('test -f b.txt', FINAL)])
+        r = self.flow()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        state = self.state()
+        self.assertEqual(state['status'], 'ACHIEVED')
+        item = state['milestones'][0]
+        self.assertEqual((item['turns'], item['revisions'], [review['verdict'] for review in item['reviews']]),
+                         (2, 0, ['CONTINUE', 'ACCEPT']))
+        self.assertEqual(state['scorecard']['final']['values'], {'files': 2})
+        # The probe and the build were two turns of the same worker conversation.
+        self.assertEqual((self.agent_state / 'claude.calls').read_text(), '2')
+        self.assertEqual(len({p.read_text() for p in self.agent_state.glob('claude.session.*')}), 1)
 
     def test_native_protocol_recovery_continues_same_stage(self):
         self.script('supervisor', [('true', {}), (self.EXPIRE, SUPERVISE)])

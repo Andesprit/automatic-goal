@@ -1,7 +1,8 @@
 name: goal_loop
 description: >-
-  Observe, compare opportunities, build bold milestones, review and repair, and keep going
-  until the time is used, then demonstrate the result. By default Codex directs (plans, reviews,
+  Observe, turn the goal into a scorecard the controller measures, place large bets with a
+  hypothesis and a probe, build with a check-in after every worker turn, review and repair, and
+  keep going until the time is used, then demonstrate the result against the scorecard. By default Codex directs (plans, reviews,
   demonstrates) and Claude Code builds; choose other agents or models with --agent. Durable
   checkpoints preserve priorities and evidence across multiple commits and stages. The finishing reserve defaults to 10 percent. Usage floors remain strict; below a
   floor, or inside the buffer before new work, the run waits for a reset instead of ending.
@@ -9,7 +10,7 @@ description: >-
 inputs:
   goal: The user outcome sought. Used only inside agent prompts, never interpolated into shell.
   finish_reserve_percent: {description: "Percent of wall time reserved for integration and demonstration (5-50). Trusted numeric input.", default: "10"}
-  max_revisions: {description: "Repair rounds per milestone and integration repair milestones (0-5). Trusted numeric input.", default: "2"}
+  max_revisions: {description: "Repair rounds per milestone and integration repair milestones (0-5); check-in turns are bounded by the milestone's budget instead. Trusted numeric input.", default: "2"}
   usage_reserve_percent: {description: "Extra percentage points above each usage floor required to start features (0-25). Trusted numeric input.", default: "5"}
   hours: Hours to keep iterating, up to 720, decimals allowed (1.5 is ninety minutes). Trusted operator input, interpolated into shell.
   min_claude_fable_remaining: {description: "Pause while the remaining Claude Fable weekly allowance is below this percent (1-100); exactly this much remaining still runs. Trusted operator input, interpolated into shell.", default: "50"}
