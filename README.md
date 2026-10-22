@@ -41,7 +41,8 @@ CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 atelier run goal_loop \
 
 Quote the goal as a single argument. It is only interpolated into agent prompts, never shell.
 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` is required: agent commands and checks must complete
-in the foreground before the harness closes the session. Nothing is pushed or deployed.
+in the foreground before the harness closes the session. Nothing is deployed. Nothing is pushed
+until the run has ended; then the run opens a pull request (see below).
 
 | Input | Default | Meaning |
 |---|---|---|
@@ -55,6 +56,8 @@ in the foreground before the harness closes the session. Nothing is pushed or de
 | `min_codex_remaining` | 30 | Codex weekly remaining floor |
 | `usage_poll_seconds` | 300 | Seconds between usage checks while paused, 1–3600 |
 | `claude_weekly_model` | Fable | Model whose weekly meter the first floor applies to, or `all` |
+| `pull_request` | true | Open or update a pull request for the accepted work when the run ends |
+| `pull_request_base` | empty | Branch the pull request targets; empty means the repository default |
 
 Choose the finishing reserve for the project's risk and run length. The supervisor cannot
 finish early or lower your reserve or usage floors: the final demonstration starts only when
@@ -74,6 +77,22 @@ turns have a **soft deadline**: they may complete their bounded turn before the 
 Codex stages have an 1800-second cap, implementation 3600; a transport failure has one retry,
 and a stage pass has a 7200-second outer cap. Finishing reserves do not turn these into hard
 process deadlines. At most 500 passes, including pauses, run before the loop fails safely.
+
+### Pull request at the end
+
+When the run ends with accepted work, `goal_loop` opens a pull request. The controller checks
+that `origin` exists and `gh` is signed in, then writes `.atelier/goal/pr-request.json`. A Claude
+Code agent writes the title and the description with the `pull-request` skill (What, Why, How,
+Validation, then a "Not verified" line) and changes no code. The controller then pushes only
+the accepted HEAD, never with force, and opens the pull request. It is a draft unless the
+status is ACHIEVED. If the branch already has an open pull request, its title and description
+are updated instead. The link is saved in `state.json` and in the handoff.
+
+No accepted work, no `origin`, no signed-in `gh` or `pull_request=false` skips this step;
+the reason is in the `pr_ready` output and the flow still completes. A rejected push (someone
+else moved the remote branch) fails the `pr_open` task and opens nothing; the run's own result
+is already saved. Install the `pull-request` skill where Claude Code finds it (for example
+`~/.claude/skills/pull-request`); without it the agent follows the same format from its prompt.
 
 For unattended use, launch through a persistent job mechanism and record the worktree, branch,
 flow ID and output log. Installation does not start a run. The conduits do not schedule themselves.
@@ -378,4 +397,5 @@ only trusted numeric values and generated IDs, never untrusted strings. Goal tex
 results are not interpolated into shell. Stage JSON is parsed and validated against Git state.
 Abandon/defer resets are limited to the guarded dedicated worktree, after saving the commit ref.
 No reset, cleanup, push, deployment, usage reset, credit purchase or model switch is performed
-merely to force an interrupted or usage-paused run to continue.
+merely to force an interrupted or usage-paused run to continue. The only push is the accepted
+HEAD to the run's own branch on `origin`, after the run has ended, and never with force.

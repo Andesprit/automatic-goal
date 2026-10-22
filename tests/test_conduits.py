@@ -67,6 +67,22 @@ values = json.loads(p.read_text()) if p.exists() else [99,99,99]
 Path(os.environ['GOAL_USAGE_FILE']).write_text(json.dumps({'remaining':values}))
 print('fixture usage: ' + str(values))
 '''
+# Stand-in for the GitHub CLI: logs each call, answers from files in FAKE_GH_DIR.
+FAKE_GH = '''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+home, args = Path(os.environ['FAKE_GH_DIR']), sys.argv[1:]
+with open(home / 'calls.jsonl', 'a') as out:
+    out.write(json.dumps(args) + '\\n')
+if args[:2] == ['auth', 'status'] and (home / 'signed-out').exists():
+    sys.exit('You are not logged into any GitHub hosts')
+if args[:2] == ['repo', 'view']:
+    print('main')
+elif args[:2] == ['pr', 'list'] and (home / 'existing').exists():
+    print((home / 'existing').read_text())
+elif args[:2] == ['pr', 'create']:
+    print('Creating pull request\\nhttps://github.com/o/r/pull/7')
+'''
 
 
 def git(cwd, *args):
@@ -864,6 +880,122 @@ class SharedHistory(Repo):
         self.assertIn('Legacy experiment', (shared / 'index.md').read_text())
 
 
+def remote(test):
+    """A bare origin with main pushed, and the fake gh first on PATH; returns the environment to use."""
+    origin, home, bin_dir = test.tmp / 'origin.git', test.tmp / 'gh', test.tmp / 'bin'
+    git(test.tmp, 'init', '-q', '--bare', str(origin))
+    git(test.main, 'remote', 'add', 'origin', str(origin))
+    git(test.main, 'push', '-q', 'origin', 'main')
+    home.mkdir()
+    bin_dir.mkdir()
+    (bin_dir / 'gh').write_text(FAKE_GH)
+    (bin_dir / 'gh').chmod(0o755)
+    test.origin, test.gh = origin, home
+    return {**GIT_ENV, 'PATH': f"{bin_dir}{os.pathsep}{os.environ['PATH']}", 'FAKE_GH_DIR': str(home)}
+
+
+def gh_calls(test):
+    log = test.gh / 'calls.jsonl'
+    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
+class PullRequests(Repo):
+    def setUp(self):
+        super().setUp()
+        self.env = remote(self)
+
+    def finish(self, status='ACHIEVED'):
+        self.build()
+        self.result(REVIEW)
+        self.time_up()
+        self.route('FINALIZE')
+        final = FINAL if status == 'ACHIEVED' else {**FINAL, 'status': status, 'remaining': ['Not demonstrated']}
+        self.assertEqual(self.result(final), 'GOAL_DONE')
+
+    def pr(self, *args):
+        return self.cmd(*args, env=self.env)
+
+    def ready(self, *args):
+        r = self.pr('pr-ready', *(args or ('true',)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def write(self, title='Unblock the first run', body='# What\n- The first run works\n'):
+        (self.wt / '.atelier/goal/pr-title.txt').write_text(title)
+        (self.wt / '.atelier/goal/pr-body.md').write_text(body)
+
+    def test_achieved_run_pushes_accepted_head_and_opens_a_ready_pull_request(self):
+        self.finish()
+        self.assertEqual(self.ready(), 'PR_OPEN')
+        request = json.loads((self.wt / '.atelier/goal/pr-request.json').read_text())
+        head = self.state()['accepted_head']
+        self.assertEqual((request['base'], request['head'], request['draft']), ('main', head, False))
+        self.write()
+        r = self.pr('pr-done')
+        self.assertEqual((r.returncode, r.stdout), (0, 'https://github.com/o/r/pull/7'), r.stderr)
+        self.assertEqual(git(self.origin, 'rev-parse', 'work'), head)
+        create = next(call for call in gh_calls(self) if call[:2] == ['pr', 'create'])
+        self.assertEqual(create[2:6], ['--base', 'main', '--head', 'work'])
+        self.assertNotIn('--draft', create)
+        self.assertEqual(self.state()['pull_request']['url'], 'https://github.com/o/r/pull/7')
+        self.assertIn('Pull request: https://github.com/o/r/pull/7', (self.wt / '.atelier/goal/handoff.md').read_text())
+
+    def test_partial_run_opens_a_draft_and_pushes_only_accepted_work(self):
+        self.finish('PARTIAL')
+        accepted = self.state()['accepted_head']
+        self.commit('c.txt')
+        self.assertEqual(self.ready(), 'PR_OPEN')
+        self.write()
+        r = self.pr('pr-done')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(git(self.origin, 'rev-parse', 'work'), accepted)
+        create = next(call for call in gh_calls(self) if call[:2] == ['pr', 'create'])
+        self.assertIn('--draft', create)
+
+    def test_skips_are_not_errors(self):
+        self.finish()
+        self.assertEqual(self.ready('false'), 'PR_SKIP: pull_request is false')
+        self.assertEqual(self.ready('true', 'work'), "PR_SKIP: unusable base branch 'work'")
+        (self.gh / 'signed-out').touch()
+        self.assertRegex(self.ready(), r'^PR_SKIP: gh auth status failed: You are not logged')
+        (self.gh / 'signed-out').unlink()
+        git(self.main, 'remote', 'remove', 'origin')
+        self.assertEqual(self.ready(), 'PR_SKIP: no origin remote')
+        self.set_state(accepted_head=self.base)
+        self.assertEqual(self.ready(), 'PR_SKIP: no accepted changes')
+        self.assertEqual(self.pr('pr-ready', 'yes').returncode, 1)
+        self.set_state(status='ACTIVE')
+        self.assertIn('has not finished', self.pr('pr-ready', 'true').stderr)
+        self.assertFalse(any(call[:1] == ['pr'] for call in gh_calls(self)))
+
+    def test_open_pull_request_is_updated_not_duplicated(self):
+        self.finish()
+        (self.gh / 'existing').write_text('https://github.com/o/r/pull/3')
+        self.ready()
+        self.write()
+        r = self.pr('pr-done')
+        self.assertEqual(r.stdout, 'https://github.com/o/r/pull/3', r.stderr)
+        calls = [call[:2] for call in gh_calls(self)]
+        self.assertIn(['pr', 'edit'], calls)
+        self.assertNotIn(['pr', 'create'], calls)
+
+    def test_bad_description_or_moved_remote_branch_opens_nothing(self):
+        self.finish()
+        self.ready()
+        self.write(title='')
+        self.assertEqual(self.pr('pr-done').returncode, 1)
+        self.write(body='x' * 65537)
+        self.assertEqual(self.pr('pr-done').returncode, 1)
+        # Someone else pushed to the branch: the push must fail instead of overwriting it.
+        other = git(self.main, 'commit-tree', '-p', self.base, '-m', 'other', 'HEAD^{tree}')
+        git(self.main, 'push', '-q', 'origin', f'{other}:refs/heads/work')
+        self.write()
+        self.assertEqual(self.pr('pr-done').returncode, 1)
+        self.assertEqual(git(self.origin, 'rev-parse', 'work'), other)
+        self.assertNotIn(['pr', 'create'], [call[:2] for call in gh_calls(self)])
+        self.assertNotIn('pull_request', self.state())
+
+
 class NativeLoop(Repo):
     def setUp(self):
         super().setUp()
@@ -891,12 +1023,12 @@ class NativeLoop(Repo):
                              'reply': 'Finished this stage. No magic completion marker.'})
         (self.agent_state / (role + '.json')).write_text(json.dumps({'turns': scripted}))
 
-    def flow(self, resume=None):
+    def flow(self, resume=None, env=GIT_ENV):
         agent = [sys.executable, str(ROOT / 'tests/fake_agent.py'), str(self.agent_state)]
         command = ['atelier', 'run', '--resume', resume, '--hide-steps'] if resume else [
             'atelier', 'run', 'goal_loop', '--hide-steps', '-i', 'goal=First useful workflow', '-i', 'hours=1']
         return subprocess.run(command,
-                              cwd=self.wt, env={**GIT_ENV, 'ATELIER_CLAUDE_LAUNCH_CMD': json.dumps(agent + ['claude']),
+                              cwd=self.wt, env={**env, 'ATELIER_CLAUDE_LAUNCH_CMD': json.dumps(agent + ['claude']),
                                                'ATELIER_CODEX_LAUNCH_CMD': json.dumps(agent + ['codex'])},
                               capture_output=True, text=True, timeout=90)
 
@@ -925,6 +1057,26 @@ class NativeLoop(Repo):
         self.assertEqual(len(set().union(*codex)), 1)
         self.assertTrue(all(codex))
         self.assertNotEqual(claude, codex[0])
+
+    def test_native_run_ends_with_a_pull_request_written_by_the_worker(self):
+        env = remote(self)
+        self.script('supervisor', [('true', SUPERVISE), (self.EXPIRE, SUPERVISE)])
+        self.script('claude', [("printf b > b.txt\ngit add b.txt\ngit commit -qm first",
+                                {'status':'READY','summary':'First run','checks':[CHECK],'evidence':['b.txt']})])
+        scripted = json.loads((self.agent_state / 'claude.json').read_text())
+        scripted['turns'].append({'run': "printf 'Unblock the first run' > .atelier/goal/pr-title.txt\n"
+                                         "printf '# What\\n- The first run works\\n' > .atelier/goal/pr-body.md",
+                                  'reply': 'Wrote the pull request.'})
+        (self.agent_state / 'claude.json').write_text(json.dumps(scripted))
+        self.script('codex', [('test -f b.txt', REVIEW)])
+        self.script('finalizer', [('test -f b.txt', FINAL)])
+        r = self.flow(env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        state = self.state()
+        self.assertEqual(state['pull_request']['url'], 'https://github.com/o/r/pull/7')
+        self.assertEqual(git(self.origin, 'rev-parse', 'work'), state['accepted_head'])
+        self.assertIn('pull-request skill', (self.agent_state / 'claude.prompt.2').read_text())
+        self.assertIn('# What', (self.wt / '.atelier/goal/pr-body.md').read_text())
 
     def test_native_bet_probes_checks_in_and_builds_in_one_worker_conversation(self):
         self.script('supervisor', [('true', {**SUPERVISE, 'milestone': BET}), (self.EXPIRE, SUPERVISE)])

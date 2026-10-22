@@ -26,6 +26,8 @@ JUDGED = {"unmet", "partial", "met"}
 MEASURE_SECONDS = 120
 # A reviewer may accept with small notes only when at least this share of the change is ready as is.
 ACCEPT_READY_PERCENT = 70
+# GitHub rejects a pull request description longer than this.
+PR_BODY_LIMIT = 65536
 # Set by `check`: validate a result without changing state, history or Git.
 DRY = False
 
@@ -107,6 +109,7 @@ def detailed_report(state):
     lines = ["# Outcome handoff", "", f"Status: {state['status']}",
              f"Branch: {state['branch']}", f"Run: {state['id']}",
              f"Accepted HEAD: {state['accepted_head']}",
+             *([f"Pull request: {state['pull_request']['url']}"] if state.get("pull_request") else []),
              f"Elapsed seconds: {int(state.get('finished', time.time()) - state['started'])}", "",
              "## Intended outcome", brief.get("outcome", "Planning not completed."), "",
              "## Before", final.get("before", "\n".join(brief.get("baseline", [])) or "Not measured."), "",
@@ -725,6 +728,73 @@ def stop(reason):
     return finish(path, state, "PARTIAL", f"Stopped by the operator: {reason}")
 
 
+def gh(*args):
+    proc = subprocess.run(["gh", *args], capture_output=True, text=True, timeout=120,
+                          stdin=subprocess.DEVNULL)
+    if proc.returncode:
+        raise RuntimeError(f"gh {args[0]} {args[1] if len(args) > 1 else ''} failed: {proc.stderr.strip()[:300]}")
+    return proc.stdout.strip()
+
+
+def pr_ready(enabled, base):
+    """After the run, decide whether its accepted work goes up as a pull request; a skip is not an error."""
+    if enabled not in {"true", "false"}:
+        raise ValueError("pull_request must be true or false")
+    path, state = location()
+    if state["status"] not in TERMINAL:
+        raise RuntimeError("the run has not finished")
+    if enabled == "false":
+        return "PR_SKIP: pull_request is false"
+    if state["accepted_head"] == state["initial_base"]:
+        return "PR_SKIP: no accepted changes"
+    if "origin" not in git("remote").split():
+        return "PR_SKIP: no origin remote"
+    try:
+        if not shutil.which("gh"):
+            raise RuntimeError("gh is not installed")
+        gh("auth", "status")
+        base = base or gh("repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name")
+    except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
+        return f"PR_SKIP: {error}"
+    if not re.fullmatch(r"[A-Za-z0-9._/-]+", base) or base == state["branch"]:
+        return f"PR_SKIP: unusable base branch {base!r}"
+    for name in ("pr-title.txt", "pr-body.md"):
+        (path / name).unlink(missing_ok=True)
+    write_json(path / "pr-request.json", {
+        "base": base, "branch": state["branch"], "initial_base": state["initial_base"],
+        "head": state["accepted_head"], "status": state["status"], "draft": state["status"] != "ACHIEVED",
+        "unfinished_milestone": state["active"] is not None, "body_limit": PR_BODY_LIMIT,
+        "title_path": ".atelier/goal/pr-title.txt", "body_path": ".atelier/goal/pr-body.md"})
+    return "PR_OPEN"
+
+
+def pr_done():
+    """Push only the accepted HEAD, then open the pull request or update the open one for this branch."""
+    path, state = location()
+    request = read_json(path / "pr-request.json")
+    if request["head"] != state["accepted_head"]:
+        raise RuntimeError("accepted HEAD changed after the pull request was prepared")
+    title = (path / "pr-title.txt").read_text(encoding="utf-8").strip()
+    body = (path / "pr-body.md").read_text(encoding="utf-8").strip()
+    if not title or "\n" in title:
+        raise ValueError("pr-title.txt must hold one nonempty line")
+    if not body or len(body) > PR_BODY_LIMIT:
+        raise ValueError(f"pr-body.md must be nonempty and at most {PR_BODY_LIMIT} characters")
+    branch, body_file = request["branch"], str(path / "pr-body.md")
+    # Never force: if someone else moved the remote branch, the push fails and nothing is lost.
+    git("push", "-q", "origin", f"{request['head']}:refs/heads/{branch}")
+    url = gh("pr", "list", "--head", branch, "--state", "open", "--json", "url", "--jq", ".[0].url")
+    if url:
+        gh("pr", "edit", url, "--title", title, "--body-file", body_file)
+    else:
+        url = gh("pr", "create", "--base", request["base"], "--head", branch, "--title", title,
+                 "--body-file", body_file, *(["--draft"] if request["draft"] else [])).splitlines()[-1]
+    state["pull_request"] = {"url": url, "base": request["base"], "head": request["head"],
+                             "draft": request["draft"], "at": time.time()}
+    save(path, state)
+    return url
+
+
 def apply_result():
     path, state = location()
     request = state["request"]
@@ -877,6 +947,10 @@ def main():
     sub.add_parser("check")
     sub.add_parser("session")
     sub.add_parser("stop").add_argument("reason")
+    ready = sub.add_parser("pr-ready")
+    ready.add_argument("enabled")
+    ready.add_argument("base", nargs="?", default="")
+    sub.add_parser("pr-done")
     args = parser.parse_args()
     try:
         if args.command == "init":
@@ -900,6 +974,10 @@ def main():
             result = session()
         elif args.command == "stop":
             result = stop(args.reason)
+        elif args.command == "pr-ready":
+            result = pr_ready(args.enabled, args.base)
+        elif args.command == "pr-done":
+            result = pr_done()
         else:
             result = apply_result()
         print(result, end="")
