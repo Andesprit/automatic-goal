@@ -76,6 +76,7 @@ tasks:
       repeat: 500
       until: 'output.match(^GOAL_DONE$)'
       on_exhaust: fail
+      on_failed_try: fail
       timeout: 7200
   - pr_ready:
       description: Decide whether the finished run opens a pull request; prints PR_OPEN or PR_SKIP with the reason
