@@ -20,7 +20,7 @@ work, and you pick which accepted milestones to keep after the run.
 
 ## Setup and run
 
-Requirements: Git, Bash, Python 3.11+ as `python3`, Atelier 0.12.0+, and the `codex` and `claude-code`
+Requirements: Git, Bash, Python 3.11+ as `python3`, Atelier 0.13.0+, and the `codex` and `claude-code`
 harnesses with their existing logins. Python helpers use the standard library; reports/tests
 also need PyYAML. Use a clean, dedicated linked worktree and a normal main checkout with a
 `.git` directory. Main checkouts, detached HEAD, submodules and tracked `.atelier/` files are
