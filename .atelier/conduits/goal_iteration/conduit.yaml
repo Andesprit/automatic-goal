@@ -25,6 +25,9 @@ inputs:
       to (for example Fable or Opus), or all for the all-model weekly total. Trusted operator input,
       interpolated into shell.
     default: Fable
+  stage_guard:
+    description: Internal parent run ID for controller failure diagnostics.
+    default: "standalone"
   run_id:
     description: Internal run ID from goal_loop; auto creates a standalone checkpoint. Trusted generated
       identifier.
@@ -33,7 +36,7 @@ tasks:
 - route:
     description: Check durable state, deadline, usage and Git; choose one stage or checkpoint an incomplete
       handoff
-    task: 'python3 "{{conduit_dir}}/scripts/run.py" route ''{{inputs.run_id}}'' ''{{inputs.deadline}}''
+    task: 'python3 "{{conduit_dir}}/../goal_loop/scripts/stage.py" "$INPUT_STAGE_GUARD" route ''{{inputs.run_id}}'' ''{{inputs.deadline}}''
       ''{{inputs.min_claude_fable_remaining}}'' ''{{inputs.min_claude_5h_remaining}}'' ''{{inputs.min_codex_remaining}}''
       ''{{inputs.usage_poll_seconds}}'' ''{{inputs.claude_weekly_model}}'' '
     tool: tool:bash
@@ -141,13 +144,13 @@ tasks:
 - supervise_result:
     description: Validate structured output and Git; checkpoint, recover protocol errors, or advance the
       outcome
-    task: python3 "{{conduit_dir}}/scripts/run.py" apply
+    task: python3 "{{conduit_dir}}/../goal_loop/scripts/stage.py" "$INPUT_STAGE_GUARD" apply
     tool: tool:bash
     depends_on:
     - supervise
 - milestone_session:
     description: Name the active milestone's conversation, so a repair continues the build that made it
-    task: python3 "{{conduit_dir}}/scripts/run.py" session
+    task: python3 "{{conduit_dir}}/../goal_loop/scripts/stage.py" "$INPUT_STAGE_GUARD" session
     tool: tool:bash
     depends_on:
     - route.output.match(^IMPLEMENT$)
@@ -235,7 +238,7 @@ tasks:
 - implement_result:
     description: Validate structured output and Git; checkpoint, recover protocol errors, or advance the
       outcome
-    task: python3 "{{conduit_dir}}/scripts/run.py" apply
+    task: python3 "{{conduit_dir}}/../goal_loop/scripts/stage.py" "$INPUT_STAGE_GUARD" apply
     tool: tool:bash
     depends_on:
     - implement
@@ -342,7 +345,7 @@ tasks:
 - review_result:
     description: Validate structured output and Git; checkpoint, recover protocol errors, or advance the
       outcome
-    task: python3 "{{conduit_dir}}/scripts/run.py" apply
+    task: python3 "{{conduit_dir}}/../goal_loop/scripts/stage.py" "$INPUT_STAGE_GUARD" apply
     tool: tool:bash
     depends_on:
     - review
@@ -411,7 +414,7 @@ tasks:
 - finalize_result:
     description: Validate structured output and Git; checkpoint, recover protocol errors, or advance the
       outcome
-    task: python3 "{{conduit_dir}}/scripts/run.py" apply
+    task: python3 "{{conduit_dir}}/../goal_loop/scripts/stage.py" "$INPUT_STAGE_GUARD" apply
     tool: tool:bash
     depends_on:
     - finalize

@@ -253,16 +253,31 @@ milestone BLOCKED, saves its code under a ref and returns to the supervisor. Une
 HEAD or tracked-file changes stop the run and preserve work.
 The human-readable handoff exists even when transport failure prevents a final agent response.
 
-Inspect before resuming an interrupted flow:
+If an agent times out or its adapter crashes, Atelier retries the turn once. If that retry
+also fails, the parent flow stops on the same pass and preserves the checkpoint and working
+tree. A controller script error stops the pass immediately. Its stderr streams to the flow
+log, followed by the command, exit code and the tail of the error. Atelier handles explicit
+provider usage-limit responses under its configured wait budget.
+
+From its worktree, diagnose the parent flow and inspect the checkpoint.
 
 ```sh
 git status
+atelier diagnose <flow_id>
 atelier status <flow_id>
 atelier outputs <flow_id>
 atelier logs <flow_id>
 cat .atelier/goal/handoff.md
+```
+
+After correcting the cause, resume the same parent flow from its checkpoint.
+
+```sh
 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 atelier run --resume <flow_id>
 ```
+
+Resuming retries the failed stage from the saved checkpoint. A turn that finishes with a
+missing or invalid result uses the bounded protocol recovery described above.
 
 To close a run before its deadline, run this in its worktree:
 

@@ -160,6 +160,42 @@ class Repo(unittest.TestCase):
         self.route('REVIEW')
 
 
+class StageScripts(Repo):
+    def setUp(self):
+        super().setUp()
+        self.stage = [sys.executable, str(self.scripts.parents[1] / 'goal_loop/scripts/stage.py')]
+        self.controller = self.scripts / 'run.py'
+
+    def test_standalone_returns_controller_exit_code(self):
+        self.controller.write_text("import sys\nprint(sys.argv[1])\nsys.exit(23)\n")
+        result = subprocess.run([*self.stage, 'standalone', 'route'], cwd=self.wt, capture_output=True)
+        self.assertEqual(result.returncode, 23)
+        self.assertEqual(result.stdout.strip(), b'route')
+
+    def test_stderr_is_live_and_only_the_tail_reaches_the_failure_message(self):
+        self.controller.write_text("""import sys, time
+from pathlib import Path
+print('waiting for usage', end='', file=sys.stderr, flush=True)
+deadline = time.monotonic() + 5
+while not Path('stderr.log').stat().st_size:
+    if time.monotonic() >= deadline:
+        sys.exit('stderr was buffered')
+    time.sleep(0.02)
+print('x' * 65536, file=sys.stderr)
+sys.exit('controller failed')
+""")
+        run_id = 'a' * 32
+        log = self.wt / 'stderr.log'
+        with log.open('wb') as stderr:
+            result = subprocess.run([*self.stage, run_id, 'route'], cwd=self.wt, stderr=stderr, timeout=10)
+        self.assertEqual(result.returncode, 1)
+        streamed, report = log.read_bytes().split(b'run.py route exited 1: ', 1)
+        self.assertEqual(streamed.splitlines()[:2], [b'waiting for usage' + b'x' * 65536, b'controller failed'])
+        self.assertTrue(report.rstrip().endswith(b'controller failed'), report[-200:])
+        self.assertLess(len(report), 8192)
+
+
+
 class Guards(Repo):
     def test_setup_hours_and_worktree_contract(self):
         setup = yaml.safe_load((CONDUITS / 'goal_loop/conduit.yaml').read_text())['tasks'][0]['setup']['task']
@@ -1032,6 +1068,35 @@ class NativeLoop(Repo):
                                                'ATELIER_CODEX_LAUNCH_CMD': json.dumps(agent + ['codex'])},
                               capture_output=True, text=True, timeout=90)
 
+    def test_crashed_stage_stops_the_loop_on_the_first_attempt(self):
+        controller = self.scripts / 'run.py'
+        original = controller.read_text()
+        controller.write_text("""import sys
+from pathlib import Path
+if sys.argv[1] == 'route':
+    marker = Path('.atelier/route-attempted')
+    if marker.exists():
+        print('GOAL_DONE')
+        sys.exit(0)
+    marker.touch()
+    sys.exit('route checkpoint unreadable')
+""" + original)
+
+        failed = self.flow()
+        self.assertNotEqual(failed.returncode, 0, failed.stdout + failed.stderr)
+        self.assertIn('route checkpoint unreadable', failed.stdout + failed.stderr)
+        parent = next((self.wt / '.atelier/flows').glob('*_goal_loop'))
+        self.assertEqual(len(list((parent / 'flows').glob('*_goal_iteration'))), 1)
+
+        controller.write_text(original)
+        run_id = self.state()['id']
+        self.script('supervisor', [(self.EXPIRE, SUPERVISE)])
+        self.script('finalizer', [('true', {**FINAL, 'status':'PARTIAL'})])
+        resumed = self.flow(resume=parent.name)
+        self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
+        self.assertEqual(self.state()['id'], run_id)
+        self.assertEqual(self.state()['status'], 'PARTIAL')
+
     def test_complete_native_run_with_repair_multiple_commits_and_no_markers(self):
         self.script('supervisor', [('true', SUPERVISE), (self.EXPIRE, SUPERVISE)])
         self.script('claude', [
@@ -1119,7 +1184,7 @@ class NativeLoop(Repo):
         self.assertEqual(original['phase'], 'IMPLEMENT')
         self.assertEqual((self.wt / 'b.txt').read_text(), 'draft')
         self.assertEqual((self.agent_state / 'claude.calls').read_text(), '2')
-        # Both automatic transport retries were used. Repair the fixture, then resume the parent.
+        # The first turn and its transport retry both failed. Repair the fixture, then resume the parent.
         ready = {'status':'READY','summary':'Resumed draft','checks':[CHECK],'evidence':['b.txt']}
         self.script('claude', [('git add b.txt\ngit commit -qm resumed', ready)])
         flow = next((self.wt / '.atelier/flows').glob('*_goal_loop'))
@@ -1129,6 +1194,21 @@ class NativeLoop(Repo):
         self.assertEqual(self.state()['deadline'], original['deadline'])
         self.assertEqual(self.state()['status'], 'ACHIEVED')
         self.assertEqual(git(self.wt, 'rev-list', '--count', self.base + '..HEAD'), '1')
+
+    def test_transport_failure_stops_even_if_the_agent_wrote_a_result(self):
+        self.script('supervisor', [(self.EXPIRE, SUPERVISE)])
+        self.script('finalizer', [('true', {**FINAL, 'status':'PARTIAL'})])
+        fixture = self.agent_state / 'finalizer.json'
+        scripted = json.loads(fixture.read_text())
+        scripted['turns'][0]['run'] += '\nexit 1'
+        fixture.write_text(json.dumps(scripted))
+
+        run = self.flow()
+        self.assertNotEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertEqual(self.state()['phase'], 'FINALIZE')
+        self.assertEqual(self.state()['request']['stage'], 'FINALIZE')
+        self.assertEqual(json.loads((self.wt / '.atelier/goal/result.json').read_text())['status'], 'PARTIAL')
+        self.assertEqual((self.agent_state / 'finalizer.calls').read_text(), '2')
 
 
 if __name__ == '__main__':

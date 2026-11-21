@@ -60,13 +60,14 @@ tasks:
       tool: tool:bash
       depends_on: [setup]
   - iterate:
-      description: One supervised stage or usage pause per pass; stop at the deadline after the final demonstration, or on an operational failure
+      description: Run one stage or usage pause per pass and stop the loop if the stage fails
       task: goal_iteration
       tool: tool:conduit
       inputs:
         goal: "{{inputs.goal}}"
         deadline: "{{setup.output}}"
         run_id: "{{initialize.output}}"
+        stage_guard: "{{initialize.output}}"
         min_claude_fable_remaining: "{{inputs.min_claude_fable_remaining}}"
         min_claude_5h_remaining: "{{inputs.min_claude_5h_remaining}}"
         min_codex_remaining: "{{inputs.min_codex_remaining}}"
