@@ -222,6 +222,10 @@ After correcting the cause, resume the same parent flow from its checkpoint.
 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 atelier run --resume <flow_id>
 ```
 
+If you stop a pass mid-turn before the agent writes a valid result, resuming counts as one
+protocol failure for that request. Three such stop-and-resume cycles on the same request end
+the run as `OPERATIONAL_FAILURE`.
+
 To close a run before its deadline, run this in its worktree:
 
 ```sh

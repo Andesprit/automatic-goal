@@ -128,6 +128,46 @@ class Repo(unittest.TestCase):
         self.route('REVIEW')
 
 
+class StageScripts(Repo):
+    def setUp(self):
+        super().setUp()
+        self.stage = [sys.executable, str(self.scripts.parents[1] / 'goal_loop/scripts/stage.py')]
+        self.controller = self.scripts / 'run.py'
+
+    def test_standalone_returns_controller_exit_code(self):
+        self.controller.write_text("import sys\nprint(sys.argv[1])\nsys.exit(23)\n")
+        result = subprocess.run([*self.stage, 'standalone', 'route'], cwd=self.wt, capture_output=True)
+        self.assertEqual(result.returncode, 23)
+        self.assertEqual(result.stdout.strip(), b'route')
+
+    def test_stderr_is_live_and_only_the_tail_reaches_the_failure_message(self):
+        self.controller.write_text("""import sys, time
+from pathlib import Path
+print('waiting for usage', end='', file=sys.stderr, flush=True)
+deadline = time.monotonic() + 5
+while not Path('stderr.log').stat().st_size:
+    if time.monotonic() >= deadline:
+        sys.exit('stderr was buffered')
+    time.sleep(0.02)
+print('x' * 65536, file=sys.stderr)
+sys.exit('controller failed')
+""")
+        run_id = 'a' * 32
+        log = self.wt / 'stderr.log'
+        with log.open('wb') as stderr:
+            stage = subprocess.Popen([*self.stage, run_id, 'route'], cwd=self.wt, stderr=stderr)
+            try:
+                report = subprocess.run([*self.stage, 'watch', run_id], cwd=self.wt,
+                                        capture_output=True, timeout=10)
+            finally:
+                stage.kill()
+                stage.wait()
+        self.assertEqual(report.returncode, 1)
+        self.assertTrue(report.stderr.rstrip().endswith(b'controller failed'), report.stderr[-200:])
+        self.assertLess(len(report.stderr), 8192)
+        self.assertEqual(log.read_bytes().splitlines(), [b'waiting for usage' + b'x' * 65536, b'controller failed'])
+
+
 class Guards(Repo):
     def test_setup_hours_and_worktree_contract(self):
         setup = yaml.safe_load((CONDUITS / 'goal_loop/conduit.yaml').read_text())['tasks'][0]['setup']['task']

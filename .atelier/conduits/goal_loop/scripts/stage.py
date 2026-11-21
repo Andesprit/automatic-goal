@@ -1,9 +1,9 @@
 """Report controller exits to goal_loop while Atelier retries interrupted agent turns."""
-import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 
@@ -14,7 +14,7 @@ STAGES = {"SUPERVISE", "IMPLEMENT", "REVIEW", "FINALIZE"}
 def main(args):
     mode, *args = args
     if mode == "standalone":
-        os.execv(sys.executable, [sys.executable, str(CONTROLLER), *args])
+        sys.exit(subprocess.call([sys.executable, str(CONTROLLER), *args]))
 
     run_id = args[0] if mode == "watch" else mode
     if not re.fullmatch(r"[a-f0-9]{32}", run_id):
@@ -33,17 +33,26 @@ def main(args):
         return
 
     def run(command):
-        result = subprocess.run([sys.executable, str(CONTROLLER), *command], capture_output=True)
-        sys.stderr.buffer.write(result.stderr)
-        if result.returncode:
-            reason = result.stderr.decode(errors="replace").strip()
-            temp = status.with_suffix(".tmp")
-            temp.write_text(f"run.py {command[0]} exited {result.returncode}: {reason}", encoding="utf-8")
-            temp.replace(status)
-            # The parent fails and cancels this pass before Atelier can start another.
-            while True:
-                time.sleep(60)
-        return result.stdout.decode().strip()
+        # Spool stdout so a full stdout pipe cannot block live stderr.
+        with tempfile.TemporaryFile() as stdout, subprocess.Popen(
+            [sys.executable, str(CONTROLLER), *command], stdout=stdout, stderr=subprocess.PIPE
+        ) as controller:
+            tail = b""
+            while chunk := controller.stderr.read1(8192):
+                sys.stderr.buffer.write(chunk)
+                sys.stderr.buffer.flush()
+                tail = (tail + chunk)[-4096:]
+            code = controller.wait()
+            if code == 0:
+                stdout.seek(0)
+                return stdout.read().decode().strip()
+        reason = tail.decode(errors="replace").strip()
+        temp = status.with_suffix(".tmp")
+        temp.write_text(f"run.py {command[0]} exited {code}: {reason}", encoding="utf-8")
+        temp.replace(status)
+        # The parent fails and cancels this pass before Atelier can start another.
+        while True:
+            time.sleep(60)
 
     if args[0] == "route" and pending.exists():
         run(["apply"])
