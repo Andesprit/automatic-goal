@@ -56,13 +56,14 @@ tasks:
       tool: tool:bash
       depends_on: [setup]
   - iterate:
-      description: One supervised stage or usage pause per pass; stop at the deadline after the final demonstration, or on an operational failure
+      description: Run one stage or usage pause per pass, recovering interrupted agent turns from their checkpoint
       task: goal_iteration
       tool: tool:conduit
       inputs:
         goal: "{{inputs.goal}}"
         deadline: "{{setup.output}}"
         run_id: "{{initialize.output}}"
+        stage_guard: "{{initialize.output}}"
         min_claude_fable_remaining: "{{inputs.min_claude_fable_remaining}}"
         min_claude_5h_remaining: "{{inputs.min_claude_5h_remaining}}"
         min_codex_remaining: "{{inputs.min_codex_remaining}}"
@@ -71,6 +72,17 @@ tasks:
       depends_on: [setup, initialize]
       repeat: 500
       until: 'output.match(^GOAL_DONE$)'
-      on_failed_try: fail
       on_exhaust: fail
       timeout: 7200
+  - stage_status:
+      description: Stop the loop immediately if a stage script crashes
+      task: python3 "{{conduit_dir}}/scripts/stage.py" watch "$OUTPUT_INITIALIZE"
+      tool: tool:bash
+      depends_on: [initialize]
+      timeout: 2678400  # maximum 30-day run plus a day for in-flight usage waits
+  - loop_finished:
+      description: Release the stage monitor when iteration completes
+      task: |
+        touch ".atelier/implementations/runs/$OUTPUT_INITIALIZE/loop-done" && cat "$OUTPUT_ITERATE_FILE"
+      tool: tool:bash
+      depends_on: [initialize, iterate]

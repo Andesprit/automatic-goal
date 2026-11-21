@@ -16,7 +16,7 @@ work, and you pick which accepted milestones to keep after the run.
 
 ## Setup and run
 
-Requirements: Git, Bash, Python 3.11+ as `python3`, Atelier 0.12.0+, and the `codex` and `claude-code`
+Requirements: Git, Bash, Python 3.11+ as `python3`, Atelier 0.13.0+, and the `codex` and `claude-code`
 harnesses with their existing logins. Python helpers use the standard library; reports/tests
 also need PyYAML. Use a clean, dedicated linked worktree and a normal main checkout with a
 `.git` directory. Main checkouts, detached HEAD, submodules and tracked `.atelier/` files are
@@ -199,8 +199,13 @@ milestone BLOCKED, saves its code under a ref and returns to the supervisor. Une
 HEAD or tracked-file changes stop the run and preserve work.
 The human-readable handoff exists even when transport failure prevents a final agent response.
 
-If a stage script exits with an error, `goal_loop` reports the failed stage and stops on that
-pass. From its worktree, diagnose the parent flow and inspect the checkpoint.
+If an agent times out or its adapter crashes after the transport retry, the next pass checks
+the pending result. A valid result advances the checkpoint. A missing or invalid result goes
+through the same bounded recovery with the original request ID and working tree. Atelier
+handles explicit provider usage-limit responses and stops if the reset exceeds its wait budget.
+
+If a stage script exits with an error, `goal_loop` reports the script and stops on that pass.
+From its worktree, diagnose the parent flow and inspect the checkpoint.
 
 ```sh
 git status

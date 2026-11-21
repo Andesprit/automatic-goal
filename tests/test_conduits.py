@@ -653,21 +653,33 @@ class NativeLoop(Repo):
                               capture_output=True, text=True, timeout=90)
 
     def test_crashed_stage_stops_the_loop_on_the_first_attempt(self):
-        recipe = self.scripts.parent / 'conduit.yaml'
-        iteration = yaml.safe_load(recipe.read_text())
-        iteration['tasks'][0]['route']['task'] = """
-            if [ -e .atelier/route-attempted ]; then echo GOAL_DONE; exit 0; fi
-            touch .atelier/route-attempted
-            echo 'route checkpoint unreadable' >&2
-            exit 17
-        """
-        recipe.write_text(yaml.safe_dump(iteration))
+        controller = self.scripts / 'run.py'
+        original = controller.read_text()
+        controller.write_text("""import sys
+from pathlib import Path
+if sys.argv[1] == 'route':
+    marker = Path('.atelier/route-attempted')
+    if marker.exists():
+        print('GOAL_DONE')
+        sys.exit(0)
+    marker.touch()
+    sys.exit('route checkpoint unreadable')
+""" + original)
 
         failed = self.flow()
         self.assertNotEqual(failed.returncode, 0, failed.stdout + failed.stderr)
         self.assertIn('route checkpoint unreadable', failed.stdout + failed.stderr)
         parent = next((self.wt / '.atelier/flows').glob('*_goal_loop'))
         self.assertEqual(len(list((parent / 'flows').glob('*_goal_iteration'))), 1)
+
+        controller.write_text(original)
+        run_id = self.state()['id']
+        self.script('supervisor', [(self.EXPIRE, SUPERVISE)])
+        self.script('finalizer', [('true', {**FINAL, 'status':'PARTIAL'})])
+        resumed = self.flow(resume=parent.name)
+        self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
+        self.assertEqual(self.state()['id'], run_id)
+        self.assertEqual(self.state()['status'], 'PARTIAL')
 
     def test_complete_native_run_with_repair_multiple_commits_and_no_markers(self):
         self.script('supervisor', [('true', SUPERVISE), (self.EXPIRE, SUPERVISE)])
@@ -705,27 +717,38 @@ class NativeLoop(Repo):
         self.assertFalse((self.agent_state / 'claude.calls').exists())
         self.assertTrue(any(e['kind'] == 'PROTOCOL_ERROR' for e in self.state()['events']))
 
-    def test_native_transport_failure_preserves_draft_and_resumes_same_run(self):
+    def test_failed_agent_turn_recovers_the_same_request_and_draft(self):
         self.script('supervisor', [('true', SUPERVISE), (self.EXPIRE, SUPERVISE)])
-        self.script('claude', [("printf draft > b.txt\nexit 1", {})])
+        fail = ("printf draft > b.txt\ncp .atelier/goal/request.json .atelier/first-request.json\nexit 1", {})
+        verify = ('test "$(cat b.txt)" = draft\ncp .atelier/goal/request.json .atelier/retry-request.json'
+                  '\ngit add b.txt\ngit commit -qm recovered')
+        ready = {'status':'READY','summary':'Recovered draft','checks':[CHECK],'evidence':['b.txt']}
+        self.script('claude', [fail, fail, (verify, ready)])
         self.script('codex', [('test -f b.txt', REVIEW)])
         self.script('finalizer', [('test -f b.txt', FINAL)])
-        failed = self.flow()
-        self.assertNotEqual(failed.returncode, 0)
-        original = self.state()
-        self.assertEqual(original['phase'], 'IMPLEMENT')
-        self.assertEqual((self.wt / 'b.txt').read_text(), 'draft')
-        self.assertEqual((self.agent_state / 'claude.calls').read_text(), '2')
-        # Both automatic transport retries were used. Repair the fixture, then resume the parent.
-        ready = {'status':'READY','summary':'Resumed draft','checks':[CHECK],'evidence':['b.txt']}
-        self.script('claude', [('git add b.txt\ngit commit -qm resumed', ready)])
-        flow = next((self.wt / '.atelier/flows').glob('*_goal_loop'))
-        resumed = self.flow(resume=flow.name)
-        self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
-        self.assertEqual(self.state()['id'], original['id'])
-        self.assertEqual(self.state()['deadline'], original['deadline'])
+
+        run = self.flow()
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertEqual(self.state()['status'], 'ACHIEVED')
+        first, retry = (json.loads((self.wt / '.atelier' / name).read_text()) for name in
+                        ('first-request.json', 'retry-request.json'))
+        self.assertEqual(retry['id'], first['id'])
+        self.assertTrue(retry['recovery'])
+        self.assertEqual((self.agent_state / 'claude.calls').read_text(), '3')
         self.assertEqual(git(self.wt, 'rev-list', '--count', self.base + '..HEAD'), '1')
+
+    def test_result_written_before_transport_failure_is_applied(self):
+        self.script('supervisor', [(self.EXPIRE, SUPERVISE)])
+        self.script('finalizer', [('true', {**FINAL, 'status':'PARTIAL'})])
+        fixture = self.agent_state / 'finalizer.json'
+        scripted = json.loads(fixture.read_text())
+        scripted['turns'][0]['run'] += '\nexit 1'
+        fixture.write_text(json.dumps(scripted))
+
+        run = self.flow()
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertEqual(self.state()['status'], 'PARTIAL')
+        self.assertEqual((self.agent_state / 'finalizer.calls').read_text(), '2')
 
 
 if __name__ == '__main__':
