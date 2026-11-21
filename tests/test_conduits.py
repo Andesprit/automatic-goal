@@ -652,6 +652,23 @@ class NativeLoop(Repo):
                                                'ATELIER_CODEX_LAUNCH_CMD': json.dumps(agent + ['codex'])},
                               capture_output=True, text=True, timeout=90)
 
+    def test_crashed_stage_stops_the_loop_on_the_first_attempt(self):
+        recipe = self.scripts.parent / 'conduit.yaml'
+        iteration = yaml.safe_load(recipe.read_text())
+        iteration['tasks'][0]['route']['task'] = """
+            if [ -e .atelier/route-attempted ]; then echo GOAL_DONE; exit 0; fi
+            touch .atelier/route-attempted
+            echo 'route checkpoint unreadable' >&2
+            exit 17
+        """
+        recipe.write_text(yaml.safe_dump(iteration))
+
+        failed = self.flow()
+        self.assertNotEqual(failed.returncode, 0, failed.stdout + failed.stderr)
+        self.assertIn('route checkpoint unreadable', failed.stdout + failed.stderr)
+        parent = next((self.wt / '.atelier/flows').glob('*_goal_loop'))
+        self.assertEqual(len(list((parent / 'flows').glob('*_goal_iteration'))), 1)
+
     def test_complete_native_run_with_repair_multiple_commits_and_no_markers(self):
         self.script('supervisor', [('true', SUPERVISE), (self.EXPIRE, SUPERVISE)])
         self.script('claude', [

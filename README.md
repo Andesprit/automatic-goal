@@ -199,14 +199,21 @@ milestone BLOCKED, saves its code under a ref and returns to the supervisor. Une
 HEAD or tracked-file changes stop the run and preserve work.
 The human-readable handoff exists even when transport failure prevents a final agent response.
 
-Inspect before resuming an interrupted flow:
+If a stage script exits with an error, `goal_loop` reports the failed stage and stops on that
+pass. From its worktree, diagnose the parent flow and inspect the checkpoint.
 
 ```sh
 git status
+atelier diagnose <flow_id>
 atelier status <flow_id>
 atelier outputs <flow_id>
 atelier logs <flow_id>
 cat .atelier/goal/handoff.md
+```
+
+After correcting the cause, resume the same parent flow from its checkpoint.
+
+```sh
 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 atelier run --resume <flow_id>
 ```
 

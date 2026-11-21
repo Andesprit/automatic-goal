@@ -71,5 +71,6 @@ tasks:
       depends_on: [setup, initialize]
       repeat: 500
       until: 'output.match(^GOAL_DONE$)'
+      on_failed_try: fail
       on_exhaust: fail
       timeout: 7200
