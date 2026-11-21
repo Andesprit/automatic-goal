@@ -3,11 +3,15 @@
 Move a codebase toward a demonstrated user outcome within a time and usage budget.
 Codex observes, prioritizes, supervises and reviews; Claude Code implements and repairs.
 
-**Observe → compare opportunities → choose an outcome → build → review and repair → demonstrate.**
+**Observe → write a scorecard → place a bet → probe → build with check-ins → review and repair → demonstrate.**
 
-An outcome persists across milestones and multiple focused commits. Acceptance of a milestone
-means it contributes useful, reliable behavior; only the final user-path demonstration can
-establish that the complete outcome was achieved.
+The director turns the goal into a scorecard and the controller measures it, so progress is a
+reading, not a count of accepted milestones. Work is done as a few large bets, each with a
+hypothesis, a time budget and a check-in after every worker turn. An outcome persists across
+milestones and multiple focused commits. Acceptance of a milestone means it contributes useful,
+reliable behavior; only the final demonstration against the scorecard can establish that the
+complete outcome was achieved. The report says what moved the scorecard, what did not and why,
+and where the time went.
 
 A run works like a person given the whole time slot: it keeps going until the time is used and
 never finishes early. It prefers bold ideas; a failed attempt is saved and logged with why it
@@ -37,7 +41,8 @@ CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 atelier run goal_loop \
 
 Quote the goal as a single argument. It is only interpolated into agent prompts, never shell.
 `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` is required: agent commands and checks must complete
-in the foreground before the harness closes the session. Nothing is pushed or deployed.
+in the foreground before the harness closes the session. Nothing is deployed. Nothing is pushed
+until the run has ended; then the run opens a pull request (see below).
 
 | Input | Default | Meaning |
 |---|---|---|
@@ -51,14 +56,17 @@ in the foreground before the harness closes the session. Nothing is pushed or de
 | `min_codex_remaining` | 30 | Codex weekly remaining floor |
 | `usage_poll_seconds` | 300 | Seconds between usage checks while paused, 1–3600 |
 | `claude_weekly_model` | Fable | Model whose weekly meter the first floor applies to, or `all` |
+| `pull_request` | true | Open or update a pull request for the accepted work when the run ends |
+| `pull_request_base` | empty | Branch the pull request targets; empty means the repository default |
 
 Choose the finishing reserve for the project's risk and run length. The supervisor cannot
 finish early or lower your reserve or usage floors: the final demonstration starts only when
 the reserve arrives. A milestone too big for the time left is refused and the supervisor picks
 a smaller one. Planning time counts against
-the same deadline. A milestone estimate includes implementation and review and must fit before
-the finishing reserve. A repair must leave a final handoff allowance (5% of the run, capped at
-five minutes). These estimates are planning constraints, not guarantees of agent speed.
+the same deadline. A milestone's budget covers all of its worker turns and check-ins, is counted
+in agent time, and must fit before the finishing reserve. A repair must leave a final handoff
+allowance (5% of the run, capped at five minutes). These budgets are planning constraints, not
+guarantees of agent speed.
 
 Usage is checked before every stage. New feature work requires the configured extra headroom;
 reviews, repairs and demonstrations may use that buffer, while still respecting the original
@@ -69,6 +77,22 @@ turns have a **soft deadline**: they may complete their bounded turn before the 
 Codex stages have an 1800-second cap, implementation 3600; a transport failure has one retry,
 and a stage pass has a 7200-second outer cap. Finishing reserves do not turn these into hard
 process deadlines. At most 500 passes, including pauses, run before the loop fails safely.
+
+### Pull request at the end
+
+When the run ends with accepted work, `goal_loop` opens a pull request. The controller checks
+that `origin` exists and `gh` is signed in, then writes `.atelier/goal/pr-request.json`. A Claude
+Code agent writes the title and the description with the `pull-request` skill (What, Why, How,
+Validation, then a "Not verified" line) and changes no code. The controller then pushes only
+the accepted HEAD, never with force, and opens the pull request. It is a draft unless the
+status is ACHIEVED. If the branch already has an open pull request, its title and description
+are updated instead. The link is saved in `state.json` and in the handoff.
+
+No accepted work, no `origin`, no signed-in `gh` or `pull_request=false` skips this step;
+the reason is in the `pr_ready` output and the flow still completes. A rejected push (someone
+else moved the remote branch) fails the `pr_open` task and opens nothing; the run's own result
+is already saved. Install the `pull-request` skill where Claude Code finds it (for example
+`~/.claude/skills/pull-request`); without it the agent follows the same format from its prompt.
 
 For unattended use, launch through a persistent job mechanism and record the worktree, branch,
 flow ID and output log. Installation does not start a run. The conduits do not schedule themselves.
@@ -103,11 +127,17 @@ reloaded starts a new one and continues from them.
 
 1. **Observe and compare.** Codex inspects the actual user experience, records reproducible
    baseline steps, failures or measurements, states assumptions, and defines success and
-   preserved behavior. It normally compares three to five opportunities (at least two credible
-   alternatives), ranked by upside: how much better the experience gets if the idea works.
-   Uncertainty is a reason to try, not to skip. It selects a primary and fallback and explains
-   why the primary deserves the time. Research into competitors and the best products in the
-   space is used when it sharpens an idea or reveals a bolder one.
+   preserved behavior. It writes the **scorecard**: one to six outcomes that say what progress
+   means for this goal. A measured outcome is a read-only command that prints one number; the
+   controller runs it at the start, after every worker turn and at the end, so no agent reports
+   its own numbers. A judged outcome is read by the director using the result as its user would;
+   at least one is required, so a number alone cannot stand for the goal. It normally compares
+   three to five opportunities (at least two credible alternatives), ranked by gain: how far the
+   scorecard moves if the idea works. Uncertainty is a reason to try, not to skip. It selects a
+   primary and fallback and explains why the primary deserves the time. Research into competitors
+   and the best products in the space is used when it sharpens an idea or reveals a bolder one.
+   Your verdicts on earlier runs, under "What the owner said" in the shared index, weigh on the
+   choice.
 2. **Maintain the outcome.** The brief, priority and milestones persist across stage sessions.
    Codex consults shared accepted, abandoned and unfinished history, checking which changes
    actually exist on the branch. Every stage can also report up to five notes (a fact about the
@@ -115,15 +145,22 @@ reloaded starts a new one and continues from them.
    the shared index, which every agent reads before exploring, so later agents do not rediscover
    them. A note taken on work that was rolled back stays, marked as unverified. A changed brief requires an explicit evidence-backed replan;
    the earlier brief remains in the event log. New ideas can be added at every checkpoint; when
-   the brief's criteria are met or only polish is left, Codex raises the bar with bolder ones.
-   Parts of the goal nobody has tried come before polish. At checkpoints Codex chooses to build,
-   simplify or switch. Each milestone states its ambition (bold, normal or polish), its upside,
-   why it might fail, and which accepted milestones it builds on.
-3. **Build a coherent milestone.** Claude implements across as many files and focused commits
-   as the milestone needs. The scope is the smallest independently useful experience that
-   advances the outcome, with specific acceptance checks. Small fixes are appropriate when
-   they unblock or complete that experience. Multiple commits must extend the recorded base
-   without merges or rewritten history. Journal files must never enter Git history.
+   the scorecard's targets are reached or only polish is left, Codex raises the bar with bolder
+   ones. Parts of the goal nobody has tried come before polish. At checkpoints Codex chooses to
+   build, simplify or switch. Each milestone is a **bet**: it states its ambition (bold, normal
+   or polish), its upside, why it might fail, which accepted milestones it builds on, and a
+   hypothesis: the action, the scorecard outcome it should move, from what to what, and why.
+   Its time budget is sized to the expected gain and may span several worker turns, so large
+   moves are possible.
+3. **Probe, then build with check-ins.** Anything larger than polish starts with a probe: a few
+   minutes of work that tests the way the idea is most likely to fail. Claude's first turn does
+   only that. Then Claude implements across as many files, commits and turns as the budget
+   allows, ending a turn with a checkpoint at a natural stopping point or when a decision is
+   not its own. After every turn the controller measures the scorecard, and Codex checks in:
+   it looks at the actual work and the readings, answers the question, and either hands the
+   conversation back with a direction, accepts what is worth keeping, or closes the bet. A
+   failed probe closes it before the budget is spent. Multiple commits must extend the recorded
+   base without merges or rewritten history. Journal files must never enter Git history.
 4. **Review value and correctness separately.** Codex inspects the complete milestone diff and
    independently checks its user benefit and reliability. Checks match risk and scope; broader
    validation happens at integration points. Commands, results and elapsed time are recorded.
@@ -141,8 +178,9 @@ reloaded starts a new one and continues from them.
    A repair and its re-review start from the milestone diff and the findings, not a new
    exploration of the project; ABANDON records weak value, a disproven hypothesis or
    unjustified repair cost, with what was learned. If Claude finds the idea unworkable it returns
-   BLOCKED with what it tried and saw. Repair has both a count and time budget. Exhaustion
-   becomes DEFERRED, separately from a judgment that the idea was bad. None of these end the
+   BLOCKED with what it tried and saw. Work that is not kept names its cause: the idea was
+   wrong, the execution failed, or the time ran out. Repair has both a count and time budget.
+   Exhaustion becomes DEFERRED, separately from a judgment that the idea was bad. None of these end the
    run: the supervisor chooses the next idea. Before rolling back an abandoned, deferred or
    blocked implementation, its commits and any uncommitted attempt are preserved under
    `refs/automatic-goal/<run-id>/<milestone-id>`. Only that milestone is reset; earlier accepted
@@ -151,11 +189,22 @@ reloaded starts a new one and continues from them.
    branch, runs integrated checks, records before/after evidence, and reports limitations.
    UI work calls for screenshots or recordings; agent workflows call for reproducible commands.
    Narrow integration repairs can use the finishing reserve, with their own bounded count.
-   ACHIEVED requires evidence for every success criterion. PARTIAL and BLOCKED state what remains
-   unproven. Neither a passing test suite nor exhausted time implies achievement or adoption.
-7. **You pick.** Accepted milestones stack on the goal branch. The report lists each one with
-   the reviewer's notes, what it builds on, and a `git cherry-pick <base>..<head>` command to
-   take only that milestone. Failed and deferred ideas list their saved ref and why.
+   The controller takes the final measurements and Codex reads every judged outcome itself.
+   ACHIEVED requires every judged outcome met and every measured target reached. PARTIAL and
+   BLOCKED state what remains unproven. Neither a passing test suite nor exhausted time implies
+   achievement or adoption.
+7. **You pick, and you steer the next run.** Accepted milestones stack on the goal branch. The
+   report opens with the scorecard, before and after, so you can see what the run took the goal
+   to mean. It lists each accepted milestone with its bet, what its outcome read before and
+   after, the reviewer's notes, what it builds on, and a `git cherry-pick <base>..<head>`
+   command to take only that milestone. Ideas that were not kept list their cause, their saved
+   ref and why. It ends with where the time went, what the director would do with another run,
+   and at most three questions for you. Record your verdict so the next run learns your taste:
+
+   ```sh
+   python3 .atelier/conduits/goal_iteration/scripts/memory.py feedback 0016 discard "I wanted labels before a model"
+   python3 .atelier/conduits/goal_iteration/scripts/memory.py feedback - note "Finish the layout before any new experiment"
+   ```
 
 ## Durable state and recovery
 
@@ -171,6 +220,7 @@ The main checkout holds shared, local-only records:
 .atelier/implementations/
   index.md                   # what agents learned, milestone history and links to run handoffs
   notes.jsonl                # the notes behind "What we know"; delete a line to retire a note
+  feedback.jsonl             # your verdicts behind "What the owner said"; delete a line to retire one
   0001.md                    # hypothesis, contribution, implementation and reviews
   runs/<run-id>/
     state.json               # canonical brief, milestones, decisions and timestamps
@@ -186,6 +236,10 @@ links to its current run. A second unfinished run in that worktree is refused. R
 stored in the parent flow's outputs, so a report for an older run does not accidentally show
 the newest run's brief. State writes use atomic replacement. Records and abandoned commit refs
 survive worktree deletion but are local: Git pushes do not transfer the journals or these refs.
+On Windows, Git deletes through directory links, so a plain `git worktree remove` would erase the
+shared history. The run therefore locks its worktree; before removing it, run
+`python3 .atelier/conduits/goal_iteration/scripts/memory.py detach` in it, which removes only
+the links and unlocks it. Never force past the lock with `--force --force`.
 Back them up separately. Raw flow logs remain under their originating worktree's `.atelier/flows`.
 
 Final chat formatting is not a control protocol. A valid stage JSON result is accepted regardless
@@ -199,12 +253,12 @@ milestone BLOCKED, saves its code under a ref and returns to the supervisor. Une
 HEAD or tracked-file changes stop the run and preserve work.
 The human-readable handoff exists even when transport failure prevents a final agent response.
 
-If an agent times out or its adapter crashes after the transport retry, the next pass checks
-the pending result. A valid result advances the checkpoint. A missing or invalid result goes
-through the same bounded recovery with the original request ID and working tree. Atelier
-handles explicit provider usage-limit responses and stops if the reset exceeds its wait budget.
+If an agent times out or its adapter crashes, Atelier retries the turn once. If that retry
+also fails, the parent flow stops on the same pass and preserves the checkpoint and working
+tree. A controller script error stops the pass immediately. Its stderr streams to the flow
+log, followed by the command, exit code and the tail of the error. Atelier handles explicit
+provider usage-limit responses under its configured wait budget.
 
-If a stage script exits with an error, `goal_loop` reports the script and stops on that pass.
 From its worktree, diagnose the parent flow and inspect the checkpoint.
 
 ```sh
@@ -222,9 +276,8 @@ After correcting the cause, resume the same parent flow from its checkpoint.
 CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 atelier run --resume <flow_id>
 ```
 
-If you stop a pass mid-turn before the agent writes a valid result, resuming counts as one
-protocol failure for that request. Three such stop-and-resume cycles on the same request end
-the run as `OPERATIONAL_FAILURE`.
+Resuming retries the failed stage from the saved checkpoint. A turn that finishes with a
+missing or invalid result uses the bounded protocol recovery described above.
 
 To close a run before its deadline, run this in its worktree:
 
@@ -359,4 +412,5 @@ only trusted numeric values and generated IDs, never untrusted strings. Goal tex
 results are not interpolated into shell. Stage JSON is parsed and validated against Git state.
 Abandon/defer resets are limited to the guarded dedicated worktree, after saving the commit ref.
 No reset, cleanup, push, deployment, usage reset, credit purchase or model switch is performed
-merely to force an interrupted or usage-paused run to continue.
+merely to force an interrupted or usage-paused run to continue. The only push is the accepted
+HEAD to the run's own branch on `origin`, after the run has ended, and never with force.

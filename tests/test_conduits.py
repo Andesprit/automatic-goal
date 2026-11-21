@@ -23,26 +23,42 @@ GIT_ENV = {**os.environ, 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_SYSTEM': 
            'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@t',
            'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS': '1'}
 CHECK = {'command': 'test -f b.txt', 'exit_code': 0, 'summary': 'user path works', 'duration_seconds': .1}
+JUDGED = [{'id': 'first-run', 'state': 'met', 'evidence': 'Followed the first run to the end'}]
+SCORECARD = [
+    {'id': 'first-run', 'outcome': 'A new user finishes the first run unaided', 'kind': 'judged',
+     'how': 'Follow the first run as a new user', 'baseline': 'The second step fails'},
+    {'id': 'files', 'outcome': 'Workflow files present', 'kind': 'measured',
+     'command': 'ls *.txt | wc -l', 'unit': 'files', 'direction': 'up', 'target': 2}]
 BRIEF = {
     'goal_interpretation': 'Make the first workflow useful', 'outcome': 'A useful first result unaided',
-    'baseline': ['Two manual steps; second currently fails'], 'success_criteria': ['First run succeeds'],
+    'baseline': ['Two manual steps; second currently fails'], 'scorecard': SCORECARD,
     'preserve': ['Existing login'], 'assumptions': [],
     'opportunities': [dict(id=n, title=n, benefit='fewer steps', evidence='observed failure',
                            effort='one short milestone', uncertainty='needs integration check')
                       for n in ('onboarding', 'diagnostics', 'docs')],
     'primary': 'onboarding', 'fallback': 'diagnostics',
     'selection_reason': 'It removes the first-run blocker', 'research': 'Actual failure reproduced; no external research needed'}
+HYPOTHESIS = {'action': 'Adding the missing workflow file', 'outcome': 'first-run',
+              'expected': 'from failing at the second step to finishing', 'because': 'the second step reads that file',
+              'failure_mode': 'The runner may reject the file'}
+# A small single-turn milestone; BET below is the multi-turn kind that starts with a probe.
 MILESTONE = {'title': 'First useful workflow', 'opportunity': 'onboarding', 'benefit': 'Unblocks new users',
-             'ambition': 'bold', 'upside': 'New users succeed alone', 'risk': 'The runner may not allow it',
+             'ambition': 'polish', 'upside': 'New users succeed alone', 'risk': 'The runner may not allow it',
+             'hypothesis': HYPOTHESIS,
              'acceptance': ['First run succeeds'], 'scope': ['b.txt'], 'checks': ['test -f b.txt'],
-             'estimated_seconds': 10}
+             'budget_seconds': 10}
+BET = {**MILESTONE, 'ambition': 'bold', 'probe': 'Feed the runner an empty workflow file and see whether it accepts it',
+       'budget_seconds': 600}
 SUPERVISE = {'action': 'BUILD', 'brief': BRIEF, 'reason': 'Highest observed benefit',
              'learning': 'Reproduced the initial failure', 'priority': 'First run', 'milestone': MILESTONE}
 REVIEW = {'verdict': 'ACCEPT', 'ready_percent': 90, 'correctness': 'Checks pass', 'value': 'First run no longer fails',
-          'reason': 'Demonstrated useful contribution', 'evidence': ['test -f b.txt'], 'checks': [CHECK], 'findings': []}
+          'reason': 'Demonstrated useful contribution', 'evidence': ['test -f b.txt'], 'checks': [CHECK], 'findings': [],
+          'judged': JUDGED}
+CONTINUE = {'verdict': 'CONTINUE', 'reason': 'The probe passed and budget remains', 'direction': 'Build the file now',
+            'turn_seconds': 60, 'evidence': ['Read the probe output']}
+PROBED = {'status': 'CHECKPOINT', 'summary': 'The runner accepts an empty workflow file', 'evidence': ['runner exit 0']}
 FINAL = {'status': 'ACHIEVED', 'before': 'First run failed', 'after': 'First run succeeds',
-         'evidence': ['Run test -f b.txt'], 'checks': [CHECK],
-         'criteria': [{'criterion': 'First run succeeds', 'met': True, 'evidence': 'First-run command succeeds'}],
+         'evidence': ['Run test -f b.txt'], 'checks': [CHECK], 'judged': JUDGED,
          'limitations': [], 'remaining': [], 'reason': 'Baseline comparison demonstrates the outcome'}
 USAGE_STUB = '''import json, os
 from pathlib import Path
@@ -50,6 +66,22 @@ p = Path(__file__).with_name('meters.json')
 values = json.loads(p.read_text()) if p.exists() else [99,99,99]
 Path(os.environ['GOAL_USAGE_FILE']).write_text(json.dumps({'remaining':values}))
 print('fixture usage: ' + str(values))
+'''
+# Stand-in for the GitHub CLI: logs each call, answers from files in FAKE_GH_DIR.
+FAKE_GH = '''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+home, args = Path(os.environ['FAKE_GH_DIR']), sys.argv[1:]
+with open(home / 'calls.jsonl', 'a') as out:
+    out.write(json.dumps(args) + '\\n')
+if args[:2] == ['auth', 'status'] and (home / 'signed-out').exists():
+    sys.exit('You are not logged into any GitHub hosts')
+if args[:2] == ['repo', 'view']:
+    print('main')
+elif args[:2] == ['pr', 'list'] and (home / 'existing').exists():
+    print((home / 'existing').read_text())
+elif args[:2] == ['pr', 'create']:
+    print('Creating pull request\\nhttps://github.com/o/r/pull/7')
 '''
 
 
@@ -155,17 +187,13 @@ sys.exit('controller failed')
         run_id = 'a' * 32
         log = self.wt / 'stderr.log'
         with log.open('wb') as stderr:
-            stage = subprocess.Popen([*self.stage, run_id, 'route'], cwd=self.wt, stderr=stderr)
-            try:
-                report = subprocess.run([*self.stage, 'watch', run_id], cwd=self.wt,
-                                        capture_output=True, timeout=10)
-            finally:
-                stage.kill()
-                stage.wait()
-        self.assertEqual(report.returncode, 1)
-        self.assertTrue(report.stderr.rstrip().endswith(b'controller failed'), report.stderr[-200:])
-        self.assertLess(len(report.stderr), 8192)
-        self.assertEqual(log.read_bytes().splitlines(), [b'waiting for usage' + b'x' * 65536, b'controller failed'])
+            result = subprocess.run([*self.stage, run_id, 'route'], cwd=self.wt, stderr=stderr, timeout=10)
+        self.assertEqual(result.returncode, 1)
+        streamed, report = log.read_bytes().split(b'run.py route exited 1: ', 1)
+        self.assertEqual(streamed.splitlines()[:2], [b'waiting for usage' + b'x' * 65536, b'controller failed'])
+        self.assertTrue(report.rstrip().endswith(b'controller failed'), report[-200:])
+        self.assertLess(len(report), 8192)
+
 
 
 class Guards(Repo):
@@ -310,7 +338,8 @@ class Outcomes(Repo):
     def test_abandon_preserves_ref_and_restores_only_current_milestone(self):
         self.build()
         head = git(self.wt, 'rev-parse', 'HEAD')
-        self.result({**REVIEW, 'verdict': 'ABANDON', 'reason': 'Hypothesis disproven'})
+        self.assertEqual(self.result({**REVIEW, 'verdict': 'ABANDON', 'reason': 'Hypothesis disproven'}), 'RECOVER')
+        self.result({**REVIEW, 'verdict': 'ABANDON', 'reason': 'Hypothesis disproven', 'cause': 'idea'})
         state = self.state()
         self.assertEqual(git(self.wt, 'rev-parse', 'HEAD'), self.base)
         self.assertEqual(git(self.wt, 'rev-parse', state['milestones'][0]['checkpoint_ref']), head)
@@ -358,7 +387,7 @@ class Outcomes(Repo):
         self.route('IMPLEMENT')
         self.commit('c.txt')
         (self.wt / 'b.txt').write_text('unfinished')
-        self.result({'status': 'BLOCKED', 'reason': 'The runner rejects it: observed error X'})
+        self.result({'status': 'BLOCKED', 'reason': 'The runner rejects it: observed error X', 'cause': 'execution'})
         state = self.state()
         item = state['milestones'][0]
         self.assertEqual((state['status'], state['phase'], item['status']), ('ACTIVE', 'SUPERVISE', 'BLOCKED'))
@@ -376,7 +405,7 @@ class Outcomes(Repo):
         self.route()
         self.result(SUPERVISE)
         self.route('IMPLEMENT')
-        self.result({'status': 'BLOCKED', 'reason': 'Needs a product decision'})
+        self.result({'status': 'BLOCKED', 'reason': 'Needs a product decision', 'cause': 'idea'})
         item = self.state()['milestones'][0]
         self.assertEqual(item['status'], 'BLOCKED')
         self.assertNotIn('checkpoint_ref', item)
@@ -440,7 +469,7 @@ class Outcomes(Repo):
     def test_agent_can_check_its_result_without_changing_anything(self):
         self.init()
         self.route('SUPERVISE')
-        self.write({**SUPERVISE, 'milestone': {**MILESTONE, 'estimated_seconds': 99999}})
+        self.write({**SUPERVISE, 'milestone': {**MILESTONE, 'budget_seconds': 99999}})
         r = self.cmd('check')
         self.assertEqual(r.returncode, 1)
         self.assertIn('INVALID', r.stdout)
@@ -465,7 +494,7 @@ class Outcomes(Repo):
         self.assertEqual(self.cmd('apply').stdout, 'CONTINUE')
         self.route('REVIEW')
         head = git(self.wt, 'rev-parse', 'HEAD')
-        self.write({**REVIEW, 'verdict': 'ABANDON'})
+        self.write({**REVIEW, 'verdict': 'ABANDON', 'cause': 'idea'})
         self.assertEqual(self.cmd('check').returncode, 0)
         self.assertEqual(git(self.wt, 'rev-parse', 'HEAD'), head)
         self.assertEqual(git(self.wt, 'for-each-ref', 'refs/automatic-goal'), '')
@@ -508,22 +537,48 @@ class Outcomes(Repo):
         self.assertEqual(index.count('The suite needs FOO=1'), 1)
         self.assertIn('- **fact** b.txt drives the first run — read b.txt\n', index)
         self.route('REVIEW')
-        self.result({**REVIEW, 'verdict': 'ABANDON'})
+        self.result({**REVIEW, 'verdict': 'ABANDON', 'cause': 'idea'})
         index = (self.main / '.atelier/implementations/index.md').read_text()
         # A note taken on work that was rolled back may describe code that no longer exists.
         self.assertIn('read b.txt (seen on work that was not kept; verify first)', index)
         self.assertIn('- **pitfall** The suite needs FOO=1 — make test fails without it\n', index)
 
-    def test_final_achievement_requires_every_success_criterion(self):
+    def test_final_achievement_requires_every_scorecard_outcome(self):
         self.build()
         self.result(REVIEW)
         self.time_up()
         self.route('FINALIZE')
-        self.assertEqual(self.result({**FINAL, 'criteria': []}), 'RECOVER')
+        partly = [{**JUDGED[0], 'state': 'partial'}]
+        self.assertEqual(self.result({**FINAL, 'judged': partly}), 'RECOVER')
+        self.assertIn('not there yet: first-run', self.state()['reason'])
         self.assertEqual(self.state()['status'], 'ACTIVE')
-        self.assertEqual(self.result({**FINAL, 'status': 'PARTIAL', 'criteria': 'malformed'}), 'RECOVER')
-        self.result({**FINAL, 'status': 'PARTIAL', 'remaining': ['First run not demonstrated']})
+        self.assertEqual(self.result({**FINAL, 'status': 'PARTIAL', 'judged': 'malformed'}), 'RECOVER')
+        self.result({**FINAL, 'status': 'PARTIAL', 'judged': partly, 'remaining': ['First run not demonstrated']})
         self.assertEqual(self.state()['status'], 'PARTIAL')
+        self.assertEqual(self.state()['judged']['first-run']['state'], 'partial')
+
+    def test_a_missed_measured_target_is_not_achievement(self):
+        self.init()
+        self.route()
+        card = [SCORECARD[0], {**SCORECARD[1], 'target': 5}]
+        self.result({**SUPERVISE, 'brief': {**BRIEF, 'scorecard': card}})
+        self.route('IMPLEMENT')
+        self.commit()
+        self.result({'status': 'READY', 'summary': 'Working path', 'checks': [CHECK], 'evidence': ['b.txt']})
+        self.route('REVIEW')
+        self.result(REVIEW)
+        self.time_up()
+        self.route('FINALIZE')
+        self.assertEqual(self.result(FINAL), 'RECOVER')
+        self.assertIn('not there yet: files', self.state()['reason'])
+        self.result({**FINAL, 'status': 'PARTIAL', 'next_run': ['Add the three missing workflow files'],
+                     'questions': ['Is five files still the right target?']})
+        state = self.state()
+        self.assertEqual(state['scorecard']['final']['values'], {'files': 2})
+        handoff = (self.wt / '.atelier/goal/handoff.md').read_text()
+        self.assertIn('| Workflow files present | 1 files | 2 files | 5 files |', handoff)
+        self.assertIn('Add the three missing workflow files', handoff)
+        self.assertIn('Is five files still the right target?', handoff)
 
     def test_integration_findings_get_bounded_repair_in_reserve(self):
         self.build()
@@ -599,7 +654,7 @@ class Budgets(Repo):
     def test_estimate_must_fit_feature_budget(self):
         self.init()
         self.route()
-        self.result({**SUPERVISE, 'milestone': {**MILESTONE, 'estimated_seconds': 4000}})
+        self.result({**SUPERVISE, 'milestone': {**MILESTONE, 'budget_seconds': 4000}})
         self.assertEqual(self.state()['phase'], 'SUPERVISE')
         self.assertEqual(self.state()['milestones'], [])
         self.assertIn('choose a smaller one', self.state()['reason'])
@@ -632,6 +687,201 @@ class Budgets(Repo):
         self.assertEqual(git(self.wt, 'rev-parse', 'HEAD'), self.base)
 
 
+class Scorecards(Repo):
+    def brief(self, *card):
+        return {**SUPERVISE, 'brief': {**BRIEF, 'scorecard': list(card)}}
+
+    def test_controller_takes_the_baseline_itself(self):
+        self.init()
+        self.route()
+        self.result(SUPERVISE)
+        state = self.state()
+        self.assertEqual(state['scorecard']['baseline']['values'], {'files': 1})
+        self.assertEqual(state['milestones'][0]['before'], {'files': 1})
+        self.assertIn('| Workflow files present | 1 files | 1 files | 2 files |',
+                      (self.wt / '.atelier/goal/handoff.md').read_text())
+
+    def test_scorecard_needs_a_judged_outcome_and_working_commands(self):
+        self.init()
+        self.route()
+        self.assertEqual(self.result(self.brief(SCORECARD[1])), 'RECOVER')
+        self.assertIn('judged outcome', self.state()['reason'])
+        self.assertEqual(self.result(self.brief(SCORECARD[0], {**SCORECARD[1], 'command': 'echo many'})), 'RECOVER')
+        self.assertIn('files:', self.state()['reason'])
+        self.route('SUPERVISE')
+        self.result(SUPERVISE)
+        self.assertEqual(self.state()['phase'], 'IMPLEMENT')
+
+    def test_a_failing_command_goes_back_to_its_author(self):
+        self.init()
+        self.route()
+        self.assertEqual(self.result(self.brief(SCORECARD[0], {**SCORECARD[1], 'command': 'exit 3'})), 'RECOVER')
+        self.assertIn('exit code 3', self.state()['reason'])
+        self.assertIsNone(self.state()['brief'])
+
+    def test_a_command_that_changes_the_worktree_is_refused_and_undone(self):
+        self.init()
+        self.route()
+        messy = {**SCORECARD[1], 'command': 'echo x > junk.txt; echo changed > a.txt; echo 1'}
+        self.assertEqual(self.result(self.brief(SCORECARD[0], messy)), 'RECOVER')
+        self.assertIn('changed the worktree', self.state()['reason'])
+        self.assertFalse((self.wt / 'junk.txt').exists())
+        self.assertEqual((self.wt / 'a.txt').read_text(), 'a\n')
+        self.route('SUPERVISE')
+        self.result(SUPERVISE)
+        self.assertEqual(self.state()['phase'], 'IMPLEMENT')
+
+    def test_acceptance_needs_the_coordinators_own_judgement(self):
+        self.build()
+        self.assertEqual(self.result({**REVIEW, 'judged': []}), 'RECOVER')
+        self.assertIn('first-run', self.state()['reason'])
+        self.assertEqual(self.result({**REVIEW, 'judged': [{**JUDGED[0], 'state': 'great'}]}), 'RECOVER')
+        self.result(REVIEW)
+        self.assertEqual(self.state()['milestones'][0]['status'], 'ACCEPT')
+
+    def test_accepted_work_moves_the_scorecard(self):
+        self.build()
+        self.assertEqual(self.result({**REVIEW, 'judged': [{**JUDGED[0], 'id': 'files'}]}), 'RECOVER')
+        self.result({**REVIEW, 'judged': [{**JUDGED[0], 'state': 'partial'}]})
+        state = self.state()
+        self.assertEqual(state['scorecard']['latest']['values'], {'files': 2})
+        self.assertEqual(state['judged']['first-run']['state'], 'partial')
+        handoff = (self.wt / '.atelier/goal/handoff.md').read_text()
+        self.assertIn('Judged: A new user finishes the first run unaided: Partly met', handoff)
+        self.assertIn('| A new user finishes the first run unaided | The second step fails | Partly met: '
+                      'Followed the first run to the end |  |', handoff)
+
+
+class Bets(Repo):
+    def start(self, **changes):
+        self.init()
+        self.route('SUPERVISE')
+        self.result({**SUPERVISE, 'milestone': {**BET, **changes}})
+        self.route('IMPLEMENT')
+
+    def request(self):
+        return json.loads((self.wt / '.atelier/goal/request.json').read_text())
+
+    def test_larger_milestones_state_a_hypothesis_and_a_probe(self):
+        self.init()
+        self.route()
+        without = {key: value for key, value in BET.items() if key != 'probe'}
+        self.assertEqual(self.result({**SUPERVISE, 'milestone': without}), 'RECOVER')
+        self.assertIn('probe', self.state()['reason'])
+        wrong = {**BET, 'hypothesis': {**HYPOTHESIS, 'outcome': 'speed'}}
+        self.assertEqual(self.result({**SUPERVISE, 'milestone': wrong}), 'RECOVER')
+        self.assertIn('scorecard id', self.state()['reason'])
+        self.route('SUPERVISE')
+        self.result({**SUPERVISE, 'milestone': BET})
+        self.assertEqual(self.state()['phase'], 'IMPLEMENT')
+
+    def test_probe_then_steered_turns_then_acceptance(self):
+        self.start()
+        self.assertEqual(self.request()['turn']['kind'], 'probe')
+        self.commit()
+        ready = {'status': 'READY', 'summary': 'Whole workflow', 'checks': [CHECK], 'evidence': ['b.txt']}
+        self.assertEqual(self.result(ready), 'RECOVER')
+        self.assertIn('probe', self.state()['reason'])
+        git(self.wt, 'reset', '-q', '--hard', self.base)
+        self.route('IMPLEMENT')
+        self.result(PROBED)
+        self.assertEqual(self.state()['milestones'][0]['status'], 'CHECKPOINT')
+        self.route('REVIEW')
+        self.result(CONTINUE)
+        self.route('IMPLEMENT')
+        turn = self.request()['turn']
+        self.assertEqual((turn['kind'], turn['number'], turn['direction']), ('build', 2, 'Build the file now'))
+        self.assertLessEqual(turn['budget_left_seconds'], 600)
+        self.commit()
+        self.result({'status': 'CHECKPOINT', 'summary': 'First file works', 'evidence': ['b.txt'],
+                     'question': 'Should the second file reuse the login?'})
+        self.assertEqual(self.state()['milestones'][0]['readings'][-1]['values'], {'files': 2})
+        self.route('REVIEW')
+        self.result({**CONTINUE, 'direction': 'Yes, reuse the login'})
+        self.route('IMPLEMENT')
+        self.commit('c.txt')
+        self.result({**ready, 'evidence': ['b.txt and c.txt']})
+        self.route('REVIEW')
+        self.result(REVIEW)
+        state = self.state()
+        item = state['milestones'][0]
+        self.assertEqual((item['status'], item['turns'], item['revisions'], len(item['reviews'])), ('ACCEPT', 3, 0, 3))
+        self.assertEqual(state['scorecard']['latest']['values'], {'files': 3})
+        self.assertGreater(item['spent_seconds'], 0)
+        handoff = (self.wt / '.atelier/goal/handoff.md').read_text()
+        self.assertIn('Bet: Adding the missing workflow file should move "A new user finishes the first run '
+                      'unaided" (from failing at the second step to finishing), because the second step reads that file',
+                      handoff)
+        self.assertIn('First useful workflow: ', handoff.split('### Where the time went')[1])
+        self.assertIn('over 3 worker turns', handoff)
+        self.assertIn('Direction: Yes, reuse the login', handoff)
+
+    def test_a_failed_probe_closes_the_bet_and_names_the_cause(self):
+        self.start()
+        self.result({**PROBED, 'summary': 'The runner rejects every workflow file'})
+        self.route('REVIEW')
+        self.assertEqual(self.result(REVIEW), 'RECOVER')
+        self.assertIn('nothing to ACCEPT', self.state()['reason'])
+        self.result({**REVIEW, 'verdict': 'ABANDON', 'reason': 'The probe showed the runner cannot load it',
+                     'cause': 'idea', 'judged': []})
+        state = self.state()
+        item = state['milestones'][0]
+        self.assertEqual((item['status'], item['cause'], state['phase']), ('ABANDON', 'idea', 'SUPERVISE'))
+        self.assertNotIn('checkpoint_ref', item)
+        self.assertIn('**First useful workflow** (Wrong idea)', (self.wt / '.atelier/goal/handoff.md').read_text())
+        self.assertIn('Wrong idea. The probe showed', (self.wt / '.atelier/implementations/0001.md').read_text())
+        self.route('SUPERVISE')
+
+    def test_turns_stop_at_the_budget_and_at_the_feature_time(self):
+        self.start(budget_seconds=100)
+        self.result(PROBED)
+        self.route('REVIEW')
+        self.assertEqual(self.result({**CONTINUE, 'turn_seconds': 500}), 'RECOVER')
+        self.assertIn('budget is used up', self.state()['reason'])
+        self.set_state(finish_at=time.time() + 30)
+        self.assertEqual(self.result(CONTINUE), 'RECOVER')
+        self.assertIn('does not fit', self.state()['reason'])
+        self.set_state(finish_at=time.time() + 3000)
+        self.route('REVIEW')
+        self.result(CONTINUE)
+        self.assertEqual(self.state()['phase'], 'IMPLEMENT')
+
+    def test_a_steered_turn_that_no_longer_fits_keeps_its_commits_under_a_ref(self):
+        self.start()
+        self.commit()
+        head = git(self.wt, 'rev-parse', 'HEAD')
+        self.result({**PROBED, 'summary': 'Probe passed and the first file is in'})
+        self.route('REVIEW')
+        self.result(CONTINUE)
+        self.set_state(finish_at=time.time() + 5)
+        self.route('SUPERVISE')
+        item = self.state()['milestones'][0]
+        self.assertEqual((item['status'], item['cause']), ('DEFERRED', 'time'))
+        self.assertEqual(git(self.wt, 'rev-parse', item['checkpoint_ref']), head)
+        self.assertEqual(git(self.wt, 'rev-parse', 'HEAD'), self.base)
+
+
+class OwnerFeedback(Repo):
+    def memory(self, *args):
+        return subprocess.run([sys.executable, str(self.scripts / 'memory.py'), *args],
+                              cwd=self.wt, env=GIT_ENV, capture_output=True, text=True)
+
+    def test_the_owners_verdict_reaches_the_next_run(self):
+        self.build()
+        self.result(REVIEW)
+        r = self.memory('feedback', '0001', 'discard', 'I wanted the login reused, not a new file')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.memory('feedback', '-', 'note', 'Bigger moves, less bookkeeping').returncode, 0)
+        index = (self.main / '.atelier/implementations/index.md').read_text()
+        said = index.split('## What the owner said')[1].split('## What we know')[0]
+        self.assertIn('- **discard** [0001](0001.md) — I wanted the login reused, not a new file', said)
+        self.assertIn('- **note** Bigger moves, less bookkeeping', said)
+        for bad in (('9999', 'keep', 'why'), ('0001', 'love', 'why'), ('-', 'keep', 'why'), ('0001', 'keep', ' ')):
+            self.assertNotEqual(self.memory('feedback', *bad).returncode, 0)
+        self.assertIn('memory.py feedback <id> keep|discard', (self.wt / '.atelier/goal/handoff.md').read_text())
+        self.assertIn('Id: 0001', (self.wt / '.atelier/goal/handoff.md').read_text())
+
+
 class SharedHistory(Repo):
     def test_legacy_decisions_and_outcomes_survive_worktree_removal(self):
         docs = self.wt / '.atelier/implementations'
@@ -645,8 +895,18 @@ class SharedHistory(Repo):
         self.assertIn('Legacy experiment', index)
         self.assertIn('DISCARD', index)
         self.assertIn(first_id, index)
-        git(self.main, 'worktree', 'remove', '--force', str(self.wt))
         shared = self.main / '.atelier/implementations'
+        # Git deletes through a Windows junction, so a linked worktree must refuse plain removal.
+        plain = subprocess.run(['git', 'worktree', 'remove', '--force', str(self.wt)], cwd=self.main,
+                               env=GIT_ENV, capture_output=True, text=True)
+        self.assertTrue((shared / 'runs' / first_id / 'state.json').exists())
+        if plain.returncode:
+            self.assertIn('memory.py detach', plain.stderr)
+            detach = subprocess.run([sys.executable, str(self.scripts / 'memory.py'), 'detach'],
+                                    cwd=self.wt, env=GIT_ENV, capture_output=True, text=True)
+            self.assertEqual(detach.returncode, 0, detach.stderr)
+            self.assertFalse((self.wt / '.atelier/implementations').exists())
+            git(self.main, 'worktree', 'remove', '--force', str(self.wt))
         self.assertTrue((shared / 'runs' / first_id / 'state.json').exists())
         self.assertTrue((shared / '0001.md').exists())
         git(self.main, 'worktree', 'add', '-q', str(self.wt), '-b', 'fresh')
@@ -654,6 +914,122 @@ class SharedHistory(Repo):
         self.init()
         self.assertNotEqual(self.run_id, first_id)
         self.assertIn('Legacy experiment', (shared / 'index.md').read_text())
+
+
+def remote(test):
+    """A bare origin with main pushed, and the fake gh first on PATH; returns the environment to use."""
+    origin, home, bin_dir = test.tmp / 'origin.git', test.tmp / 'gh', test.tmp / 'bin'
+    git(test.tmp, 'init', '-q', '--bare', str(origin))
+    git(test.main, 'remote', 'add', 'origin', str(origin))
+    git(test.main, 'push', '-q', 'origin', 'main')
+    home.mkdir()
+    bin_dir.mkdir()
+    (bin_dir / 'gh').write_text(FAKE_GH)
+    (bin_dir / 'gh').chmod(0o755)
+    test.origin, test.gh = origin, home
+    return {**GIT_ENV, 'PATH': f"{bin_dir}{os.pathsep}{os.environ['PATH']}", 'FAKE_GH_DIR': str(home)}
+
+
+def gh_calls(test):
+    log = test.gh / 'calls.jsonl'
+    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
+class PullRequests(Repo):
+    def setUp(self):
+        super().setUp()
+        self.env = remote(self)
+
+    def finish(self, status='ACHIEVED'):
+        self.build()
+        self.result(REVIEW)
+        self.time_up()
+        self.route('FINALIZE')
+        final = FINAL if status == 'ACHIEVED' else {**FINAL, 'status': status, 'remaining': ['Not demonstrated']}
+        self.assertEqual(self.result(final), 'GOAL_DONE')
+
+    def pr(self, *args):
+        return self.cmd(*args, env=self.env)
+
+    def ready(self, *args):
+        r = self.pr('pr-ready', *(args or ('true',)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def write(self, title='Unblock the first run', body='# What\n- The first run works\n'):
+        (self.wt / '.atelier/goal/pr-title.txt').write_text(title)
+        (self.wt / '.atelier/goal/pr-body.md').write_text(body)
+
+    def test_achieved_run_pushes_accepted_head_and_opens_a_ready_pull_request(self):
+        self.finish()
+        self.assertEqual(self.ready(), 'PR_OPEN')
+        request = json.loads((self.wt / '.atelier/goal/pr-request.json').read_text())
+        head = self.state()['accepted_head']
+        self.assertEqual((request['base'], request['head'], request['draft']), ('main', head, False))
+        self.write()
+        r = self.pr('pr-done')
+        self.assertEqual((r.returncode, r.stdout), (0, 'https://github.com/o/r/pull/7'), r.stderr)
+        self.assertEqual(git(self.origin, 'rev-parse', 'work'), head)
+        create = next(call for call in gh_calls(self) if call[:2] == ['pr', 'create'])
+        self.assertEqual(create[2:6], ['--base', 'main', '--head', 'work'])
+        self.assertNotIn('--draft', create)
+        self.assertEqual(self.state()['pull_request']['url'], 'https://github.com/o/r/pull/7')
+        self.assertIn('Pull request: https://github.com/o/r/pull/7', (self.wt / '.atelier/goal/handoff.md').read_text())
+
+    def test_partial_run_opens_a_draft_and_pushes_only_accepted_work(self):
+        self.finish('PARTIAL')
+        accepted = self.state()['accepted_head']
+        self.commit('c.txt')
+        self.assertEqual(self.ready(), 'PR_OPEN')
+        self.write()
+        r = self.pr('pr-done')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(git(self.origin, 'rev-parse', 'work'), accepted)
+        create = next(call for call in gh_calls(self) if call[:2] == ['pr', 'create'])
+        self.assertIn('--draft', create)
+
+    def test_skips_are_not_errors(self):
+        self.finish()
+        self.assertEqual(self.ready('false'), 'PR_SKIP: pull_request is false')
+        self.assertEqual(self.ready('true', 'work'), "PR_SKIP: unusable base branch 'work'")
+        (self.gh / 'signed-out').touch()
+        self.assertRegex(self.ready(), r'^PR_SKIP: gh auth status failed: You are not logged')
+        (self.gh / 'signed-out').unlink()
+        git(self.main, 'remote', 'remove', 'origin')
+        self.assertEqual(self.ready(), 'PR_SKIP: no origin remote')
+        self.set_state(accepted_head=self.base)
+        self.assertEqual(self.ready(), 'PR_SKIP: no accepted changes')
+        self.assertEqual(self.pr('pr-ready', 'yes').returncode, 1)
+        self.set_state(status='ACTIVE')
+        self.assertIn('has not finished', self.pr('pr-ready', 'true').stderr)
+        self.assertFalse(any(call[:1] == ['pr'] for call in gh_calls(self)))
+
+    def test_open_pull_request_is_updated_not_duplicated(self):
+        self.finish()
+        (self.gh / 'existing').write_text('https://github.com/o/r/pull/3')
+        self.ready()
+        self.write()
+        r = self.pr('pr-done')
+        self.assertEqual(r.stdout, 'https://github.com/o/r/pull/3', r.stderr)
+        calls = [call[:2] for call in gh_calls(self)]
+        self.assertIn(['pr', 'edit'], calls)
+        self.assertNotIn(['pr', 'create'], calls)
+
+    def test_bad_description_or_moved_remote_branch_opens_nothing(self):
+        self.finish()
+        self.ready()
+        self.write(title='')
+        self.assertEqual(self.pr('pr-done').returncode, 1)
+        self.write(body='x' * 65537)
+        self.assertEqual(self.pr('pr-done').returncode, 1)
+        # Someone else pushed to the branch: the push must fail instead of overwriting it.
+        other = git(self.main, 'commit-tree', '-p', self.base, '-m', 'other', 'HEAD^{tree}')
+        git(self.main, 'push', '-q', 'origin', f'{other}:refs/heads/work')
+        self.write()
+        self.assertEqual(self.pr('pr-done').returncode, 1)
+        self.assertEqual(git(self.origin, 'rev-parse', 'work'), other)
+        self.assertNotIn(['pr', 'create'], [call[:2] for call in gh_calls(self)])
+        self.assertNotIn('pull_request', self.state())
 
 
 class NativeLoop(Repo):
@@ -683,12 +1059,12 @@ class NativeLoop(Repo):
                              'reply': 'Finished this stage. No magic completion marker.'})
         (self.agent_state / (role + '.json')).write_text(json.dumps({'turns': scripted}))
 
-    def flow(self, resume=None):
+    def flow(self, resume=None, env=GIT_ENV):
         agent = [sys.executable, str(ROOT / 'tests/fake_agent.py'), str(self.agent_state)]
         command = ['atelier', 'run', '--resume', resume, '--hide-steps'] if resume else [
             'atelier', 'run', 'goal_loop', '--hide-steps', '-i', 'goal=First useful workflow', '-i', 'hours=1']
         return subprocess.run(command,
-                              cwd=self.wt, env={**GIT_ENV, 'ATELIER_CLAUDE_LAUNCH_CMD': json.dumps(agent + ['claude']),
+                              cwd=self.wt, env={**env, 'ATELIER_CLAUDE_LAUNCH_CMD': json.dumps(agent + ['claude']),
                                                'ATELIER_CODEX_LAUNCH_CMD': json.dumps(agent + ['codex'])},
                               capture_output=True, text=True, timeout=90)
 
@@ -747,6 +1123,46 @@ if sys.argv[1] == 'route':
         self.assertTrue(all(codex))
         self.assertNotEqual(claude, codex[0])
 
+    def test_native_run_ends_with_a_pull_request_written_by_the_worker(self):
+        env = remote(self)
+        self.script('supervisor', [('true', SUPERVISE), (self.EXPIRE, SUPERVISE)])
+        self.script('claude', [("printf b > b.txt\ngit add b.txt\ngit commit -qm first",
+                                {'status':'READY','summary':'First run','checks':[CHECK],'evidence':['b.txt']})])
+        scripted = json.loads((self.agent_state / 'claude.json').read_text())
+        scripted['turns'].append({'run': "printf 'Unblock the first run' > .atelier/goal/pr-title.txt\n"
+                                         "printf '# What\\n- The first run works\\n' > .atelier/goal/pr-body.md",
+                                  'reply': 'Wrote the pull request.'})
+        (self.agent_state / 'claude.json').write_text(json.dumps(scripted))
+        self.script('codex', [('test -f b.txt', REVIEW)])
+        self.script('finalizer', [('test -f b.txt', FINAL)])
+        r = self.flow(env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        state = self.state()
+        self.assertEqual(state['pull_request']['url'], 'https://github.com/o/r/pull/7')
+        self.assertEqual(git(self.origin, 'rev-parse', 'work'), state['accepted_head'])
+        self.assertIn('pull-request skill', (self.agent_state / 'claude.prompt.2').read_text())
+        self.assertIn('# What', (self.wt / '.atelier/goal/pr-body.md').read_text())
+
+    def test_native_bet_probes_checks_in_and_builds_in_one_worker_conversation(self):
+        self.script('supervisor', [('true', {**SUPERVISE, 'milestone': BET}), (self.EXPIRE, SUPERVISE)])
+        self.script('claude', [
+            ('true', PROBED),
+            ("printf b > b.txt\ngit add b.txt\ngit commit -qm build",
+             {'status':'READY','summary':'Built after the probe','checks':[CHECK],'evidence':['b.txt']})])
+        self.script('codex', [('true', CONTINUE), ('test -f b.txt', REVIEW)])
+        self.script('finalizer', [('test -f b.txt', FINAL)])
+        r = self.flow()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        state = self.state()
+        self.assertEqual(state['status'], 'ACHIEVED')
+        item = state['milestones'][0]
+        self.assertEqual((item['turns'], item['revisions'], [review['verdict'] for review in item['reviews']]),
+                         (2, 0, ['CONTINUE', 'ACCEPT']))
+        self.assertEqual(state['scorecard']['final']['values'], {'files': 2})
+        # The probe and the build were two turns of the same worker conversation.
+        self.assertEqual((self.agent_state / 'claude.calls').read_text(), '2')
+        self.assertEqual(len({p.read_text() for p in self.agent_state.glob('claude.session.*')}), 1)
+
     def test_native_protocol_recovery_continues_same_stage(self):
         self.script('supervisor', [('true', {}), (self.EXPIRE, SUPERVISE)])
         self.script('finalizer', [('true', {**FINAL, 'status':'PARTIAL', 'remaining':['No implementation selected']})])
@@ -757,27 +1173,29 @@ if sys.argv[1] == 'route':
         self.assertFalse((self.agent_state / 'claude.calls').exists())
         self.assertTrue(any(e['kind'] == 'PROTOCOL_ERROR' for e in self.state()['events']))
 
-    def test_failed_agent_turn_recovers_the_same_request_and_draft(self):
+    def test_native_transport_failure_preserves_draft_and_resumes_same_run(self):
         self.script('supervisor', [('true', SUPERVISE), (self.EXPIRE, SUPERVISE)])
-        fail = ("printf draft > b.txt\ncp .atelier/goal/request.json .atelier/first-request.json\nexit 1", {})
-        verify = ('test "$(cat b.txt)" = draft\ncp .atelier/goal/request.json .atelier/retry-request.json'
-                  '\ngit add b.txt\ngit commit -qm recovered')
-        ready = {'status':'READY','summary':'Recovered draft','checks':[CHECK],'evidence':['b.txt']}
-        self.script('claude', [fail, fail, (verify, ready)])
+        self.script('claude', [("printf draft > b.txt\nexit 1", {})])
         self.script('codex', [('test -f b.txt', REVIEW)])
         self.script('finalizer', [('test -f b.txt', FINAL)])
-
-        run = self.flow()
-        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        failed = self.flow()
+        self.assertNotEqual(failed.returncode, 0)
+        original = self.state()
+        self.assertEqual(original['phase'], 'IMPLEMENT')
+        self.assertEqual((self.wt / 'b.txt').read_text(), 'draft')
+        self.assertEqual((self.agent_state / 'claude.calls').read_text(), '2')
+        # The first turn and its transport retry both failed. Repair the fixture, then resume the parent.
+        ready = {'status':'READY','summary':'Resumed draft','checks':[CHECK],'evidence':['b.txt']}
+        self.script('claude', [('git add b.txt\ngit commit -qm resumed', ready)])
+        flow = next((self.wt / '.atelier/flows').glob('*_goal_loop'))
+        resumed = self.flow(resume=flow.name)
+        self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
+        self.assertEqual(self.state()['id'], original['id'])
+        self.assertEqual(self.state()['deadline'], original['deadline'])
         self.assertEqual(self.state()['status'], 'ACHIEVED')
-        first, retry = (json.loads((self.wt / '.atelier' / name).read_text()) for name in
-                        ('first-request.json', 'retry-request.json'))
-        self.assertEqual(retry['id'], first['id'])
-        self.assertTrue(retry['recovery'])
-        self.assertEqual((self.agent_state / 'claude.calls').read_text(), '3')
         self.assertEqual(git(self.wt, 'rev-list', '--count', self.base + '..HEAD'), '1')
 
-    def test_result_written_before_transport_failure_is_applied(self):
+    def test_transport_failure_stops_even_if_the_agent_wrote_a_result(self):
         self.script('supervisor', [(self.EXPIRE, SUPERVISE)])
         self.script('finalizer', [('true', {**FINAL, 'status':'PARTIAL'})])
         fixture = self.agent_state / 'finalizer.json'
@@ -786,8 +1204,10 @@ if sys.argv[1] == 'route':
         fixture.write_text(json.dumps(scripted))
 
         run = self.flow()
-        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        self.assertEqual(self.state()['status'], 'PARTIAL')
+        self.assertNotEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertEqual(self.state()['phase'], 'FINALIZE')
+        self.assertEqual(self.state()['request']['stage'], 'FINALIZE')
+        self.assertEqual(json.loads((self.wt / '.atelier/goal/result.json').read_text())['status'], 'PARTIAL')
         self.assertEqual((self.agent_state / 'finalizer.calls').read_text(), '2')
 
 

@@ -73,6 +73,37 @@ class SessionReportTests(unittest.TestCase):
         self.assertEqual(summary['abandoned'][0]['detail'],
                          'Reduce setup decisions. Not kept: Duplicated an existing capability')
 
+    def test_report_leads_with_the_scorecard_and_accounts_for_the_time(self):
+        state = self.state()
+        state.update(deadline=11000, events=[
+            {'stage':'SUPERVISE','duration_seconds':600}, {'stage':'IMPLEMENT','duration_seconds':5400},
+            {'stage':'REVIEW','duration_seconds':300}, {'kind':'USAGE_PAUSE'}],
+            scorecard={'baseline':{'values':{'scripts':12}}, 'latest':{'values':{'scripts':85}}},
+            judged={'usable':{'state':'partial','evidence':'Two of five papers build'}})
+        state['brief']['scorecard'] = [
+            {'id':'scripts','outcome':'Scripts that run','kind':'measured','command':'count','unit':'%',
+             'direction':'up','target':95},
+            {'id':'usable','outcome':'A reader finds any file','kind':'judged','how':'Look for three files',
+             'baseline':'One of three found'}]
+        state['final'].update(next_run=['Repair the remaining scripts'], questions=['Keep paper 1 whole?'])
+        state['milestones'][0].update(
+            spent_seconds=3600, turns=3, before={'scripts':12}, readings=[{'values':{'scripts':85}}],
+            hypothesis={'action':'Repairing paths','outcome':'scripts','expected':'from 12% to 90%',
+                        'because':'most fail on paths','failure_mode':'Paths built from data'})
+        state['milestones'][3]['cause'] = 'idea'
+        text = report.markdown(report.summarize(state))
+        self.assertLess(text.index('### Scorecard'), text.index('### Done'))
+        self.assertIn('| Scripts that run | 12% | 85% | 95% |', text)
+        self.assertIn('| A reader finds any file | One of three found | Partly met: Two of five papers build |  |', text)
+        self.assertIn('- Bet: Repairing paths should move "Scripts that run" (from 12% to 90%), because most fail on paths', text)
+        self.assertIn('- Measured: Scripts that run: 12% → 85%', text)
+        self.assertIn('**Extra command** (Wrong idea)', text)
+        self.assertIn('- Planning 10 min · Building 1h 30m · Check-ins and reviews 5 min', text)
+        self.assertIn('- Starter picker: 1h 00m over 3 worker turns', text)
+        self.assertIn('- Unused before the deadline: 1h 01m', text)
+        self.assertIn('### Next run\n\n- Repair the remaining scripts\n\nQuestions for you:\n\n- Keep paper 1 whole?', text)
+        self.assertIn('memory.py feedback <id> keep|discard', text)
+
     def test_live_and_interrupted_sessions_remain_honest(self):
         state = self.state()
         state.update(status='ACTIVE', finished=None, priority='Repair recovery')
