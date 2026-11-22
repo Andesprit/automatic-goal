@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -57,11 +58,77 @@ def decision(project, identifier, modern):
     return ""
 
 
+def journal_event(line):
+    event = json.loads(line)
+    if event["version"] != 1 or not isinstance(event["data"], dict):
+        raise ValueError("unsupported run event")
+    return event["type"], event["data"]
+
+
+def journal_header(path):
+    try:
+        with path.open("rb") as stream:
+            line = stream.readline()
+        if not line.endswith(b"\n"):
+            return {}
+        kind, data = journal_event(line)
+        if kind == "created" and data["flow_id"] == path.stem and isinstance(data["project"], str):
+            return data
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return {}
+
+
+def flow_record(path, warnings, *, child=False):
+    if path.suffix != ".jsonl":
+        progress = read(path / "progress.json", warnings)
+        inputs = {} if child else read(path / "input.yaml", warnings)
+        outputs = read(path / "outputs.yaml", warnings) if child or (path / "outputs.yaml").exists() else {}
+        return progress, inputs, outputs
+
+    progress, inputs, outputs = {}, {}, {}
+    saved = None
+    try:
+        with path.open("rb") as stream:
+            for line in stream:
+                if not line.endswith(b"\n"):
+                    break  # A writer may still be appending this event.
+                kind, data = journal_event(line)
+                if kind == "created":
+                    inputs.update(data["inputs"])
+                    initial = data.get("progress", {})
+                    if not isinstance(initial, dict):
+                        raise ValueError("expected a progress mapping")
+                    progress = initial
+                elif kind == "input":
+                    inputs.update(data)
+                elif kind == "progress":
+                    progress = data
+                elif kind == "outputs":
+                    saved = data
+        if saved is not None:
+            outputs.update(saved["values"])
+            side = path.parent.resolve() / path.stem
+            for key, relative in saved["files"].items():
+                blob = (side / relative).resolve()
+                if not blob.is_relative_to(side / "outputs"):
+                    raise ValueError("invalid output reference")
+                outputs[key] = blob.read_text(encoding="utf-8")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        warnings.append(f"{path.name}: {error.__class__.__name__}; run record incomplete")
+    return progress, inputs, outputs
+
+
+def child_flows(path):
+    if path.suffix == ".jsonl":
+        return (child for child in path.parent.glob("*_goal_iteration.jsonl")
+                if journal_header(child).get("parent_flow_id") == path.stem)
+    return (path / "flows").glob("*_goal_iteration")
+
+
 def run_snapshot(path, project):
     warnings = []
-    progress = read(path / "progress.json", warnings)
-    inputs = read(path / "input.yaml", warnings)
-    outputs = read(path / "outputs.yaml", warnings) if (path / "outputs.yaml").exists() else {}
+    progress, inputs, outputs = flow_record(path, warnings)
     run_id = str(outputs.get("initialize") or "").strip()
     outcome = None
     handoff = ""
@@ -73,9 +140,8 @@ def run_snapshot(path, project):
         except OSError:
             warnings.append("Outcome handoff unavailable")
     ticks = []
-    for child in (path / "flows").glob("*_goal_iteration"):
-        cp = read(child / "progress.json", warnings)
-        out = read(child / "outputs.yaml", warnings)
+    for child in child_flows(path):
+        cp, _, out = flow_record(child, warnings, child=True)
         identifier = str(out.get("next_id") or "").strip()
         verdict = "UNREVIEWED"
         # A reviewer ruling and successful application are different events.
@@ -83,7 +149,8 @@ def run_snapshot(path, project):
             verdict = "KEEP"
         elif out.get("discard") is not None:
             verdict = "DISCARD"
-        ticks.append({"id": child.name, "started": cp.get("started_at", ""),
+        ticks.append({"id": child.stem if child.suffix == ".jsonl" else child.name,
+                      "started": cp.get("started_at") or "",
                       "finished": cp.get("finished_at"), "status": cp.get("status", "unknown"),
                       "stages": cp.get("tasks", {}), "current": cp.get("current_tasks", []),
                       "phase": str(out.get("route") or "").strip(),
@@ -115,7 +182,8 @@ def run_snapshot(path, project):
                   "blocked": sum(m["status"] == "BLOCKED" for m in milestones),
                   "repairs": sum(m.get("revisions", 0) for m in milestones),
                   "usage pauses": sum(t["paused"] for t in ticks)}
-    run = {"id": str(path), "name": path.name, "project": str(project),
+    run = {"id": str(path), "name": path.stem if path.suffix == ".jsonl" else path.name,
+            "project": str(project),
             "goal": inputs.get("goal", "Unknown goal"), "hours": inputs.get("hours"),
             "status": progress.get("status", "unknown"), "started": progress.get("started_at"),
             "finished": progress.get("finished_at"), "current": progress.get("current_tasks", []),
@@ -168,8 +236,19 @@ def legacy_summary(run):
 
 
 def snapshot(root):
-    runs = [run_snapshot(path, project) for project in worktrees(root)
-            for path in (project / ".atelier/flows").glob("*_goal_loop")]
+    projects = {str(project.resolve()): project for project in worktrees(root)}
+    global_dir = Path(os.environ.get("ATELIER_GLOBAL_ATELIER_DIR") or Path.home() / ".atelier")
+    paths = {}
+    for path in (global_dir / "projects").glob("*/*_goal_loop.jsonl"):
+        header = journal_header(path)
+        project = projects.get(header.get("project"))
+        if project is not None and header.get("parent_flow_id") is None:
+            paths[project, path.stem] = path
+    for project in projects.values():
+        for path in (project / ".atelier/flows").glob("*_goal_loop"):
+            if path.is_dir():
+                paths[project, path.name] = path
+    runs = [run_snapshot(path, project) for (project, _), path in paths.items()]
     runs.sort(key=lambda run: run["started"] or "", reverse=True)
     return {"observed_at": datetime.now(timezone.utc).isoformat(), "runs": runs}
 

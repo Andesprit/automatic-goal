@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1] / '.atelier/conduits/goal_loop/scripts/observe.py'
 spec = importlib.util.spec_from_file_location('observe', SCRIPT)
@@ -52,7 +53,8 @@ class ObserveTests(unittest.TestCase):
                      'milestones':[{'status':'ACCEPT'}]}
             (record / 'state.json').write_text(json.dumps(state))
             (record / 'handoff.md').write_text('Before: failed\nAfter: one milestone accepted; outcome unproven')
-            run = observe.run_snapshot(flow, project)
+            with patch.dict('os.environ', {'ATELIER_GLOBAL_ATELIER_DIR': str(project / 'global')}):
+                run, = observe.snapshot(project)['runs']
             self.assertEqual(run['outcome']['status'], 'PARTIAL')
             self.assertEqual(run['elapsed_seconds'], 60)
             self.assertEqual(run['stage_seconds'], {'REVIEW':20})
@@ -61,6 +63,44 @@ class ObserveTests(unittest.TestCase):
             self.assertIn('1 improvement completed and reviewed', report)
             self.assertNotIn('Stage seconds', report)
             self.assertIn('outcome unproven', observe.report({'observed_at':'now','runs':[run]}, detailed=True))
+
+    def test_global_journal_discovery_keeps_worktree_and_child_runs_scoped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            project, other = root / 'worktree', root / 'somewhere-else'
+            folder = root / 'global/projects/encoded-project'
+            folder.mkdir(parents=True)
+            parent = '20261121_abcdef01_goal_loop'
+            child = '20261121_abcdef02_goal_iteration'
+            unrelated = '20261121_abcdef03_goal_loop'
+
+            def journal(flow_id, origin, parent_id, *events):
+                created = {'flow_id': flow_id, 'project': str(origin), 'parent_flow_id': parent_id,
+                           'inputs': {'goal': 'initial'}}
+                rows = [('created', created), *events]
+                (folder / f'{flow_id}.jsonl').write_text(''.join(
+                    json.dumps({'version': 1, 'type': kind, 'data': data}) + '\n' for kind, data in rows))
+
+            journal(parent, project, None, ('input', {'goal': 'updated'}), ('progress', {'status': 'running'}))
+            journal(unrelated, other, None)
+            journal(child, project, parent, ('progress', {'status': 'completed'}),
+                    ('outputs', {'values': {'route': 'USAGE_PAUSED'}, 'files': {'usage': 'outputs/usage/100'}}))
+            journal('20261121_abcdef04_goal_iteration', other, unrelated)
+            blob = folder / child / 'outputs/usage/100'
+            blob.parent.mkdir(parents=True)
+            blob.write_text('USAGE_PAUSE ' + 'x' * 100_000)
+            with (folder / f'{parent}.jsonl').open('a') as stream:
+                stream.write('{"version": 1, "type": "progress", "data": {"status": "completed"}}')
+
+            with patch.dict('os.environ', {'ATELIER_GLOBAL_ATELIER_DIR': str(root / 'global')}):
+                with patch.object(observe, 'worktrees', return_value=[root, project]):
+                    run, = observe.snapshot(root)['runs']
+            self.assertEqual((run['name'], run['project'], run['goal'], run['status']),
+                             (parent, str(project), 'updated', 'running'))
+            tick, = run['ticks']
+            self.assertEqual((tick['id'], tick['status'], tick['phase']), (child, 'completed', 'USAGE_PAUSED'))
+            self.assertEqual(tick['usage'], blob.read_text())
+            self.assertEqual(run['warnings'], [])
 
     def test_partial_records_do_not_crash(self):
         with tempfile.TemporaryDirectory() as tmp:

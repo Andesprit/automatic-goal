@@ -1043,6 +1043,7 @@ class NativeLoop(Repo):
             self.skipTest('use Atelier Python to run ACP integration tests')
         self.agent_state = self.tmp / 'agents'
         self.agent_state.mkdir()
+        self.store_env = {'ATELIER_GLOBAL_ATELIER_DIR': str(self.tmp / 'atelier-global')}
 
     # Fixture shortcut: expire the feature budget so the controller starts the final demonstration.
     EXPIRE = ("python3 -c \"import json; from pathlib import Path; p=Path('.atelier/goal/state.json'); "
@@ -1064,9 +1065,18 @@ class NativeLoop(Repo):
         command = ['atelier', 'run', '--resume', resume, '--hide-steps'] if resume else [
             'atelier', 'run', 'goal_loop', '--hide-steps', '-i', 'goal=First useful workflow', '-i', 'hours=1']
         return subprocess.run(command,
-                              cwd=self.wt, env={**env, 'ATELIER_CLAUDE_LAUNCH_CMD': json.dumps(agent + ['claude']),
+                              cwd=self.wt, env={**env, **self.store_env,
+                                               'ATELIER_CLAUDE_LAUNCH_CMD': json.dumps(agent + ['claude']),
                                                'ATELIER_CODEX_LAUNCH_CMD': json.dumps(agent + ['codex'])},
                               capture_output=True, text=True, timeout=90)
+
+    def observed_flow(self):
+        observer = CONDUITS / 'goal_loop/scripts/observe.py'
+        output = subprocess.check_output([sys.executable, str(observer), 'json', '--root', str(self.wt)],
+                                         env={**GIT_ENV, **self.store_env}, text=True)
+        runs = json.loads(output)['runs']
+        self.assertEqual(len(runs), 1)
+        return runs[0]
 
     def test_crashed_stage_stops_the_loop_on_the_first_attempt(self):
         controller = self.scripts / 'run.py'
@@ -1085,14 +1095,14 @@ if sys.argv[1] == 'route':
         failed = self.flow()
         self.assertNotEqual(failed.returncode, 0, failed.stdout + failed.stderr)
         self.assertIn('route checkpoint unreadable', failed.stdout + failed.stderr)
-        parent = next((self.wt / '.atelier/flows').glob('*_goal_loop'))
-        self.assertEqual(len(list((parent / 'flows').glob('*_goal_iteration'))), 1)
+        parent = self.observed_flow()
+        self.assertEqual(len(parent['ticks']), 1)
 
         controller.write_text(original)
         run_id = self.state()['id']
         self.script('supervisor', [(self.EXPIRE, SUPERVISE)])
         self.script('finalizer', [('true', {**FINAL, 'status':'PARTIAL'})])
-        resumed = self.flow(resume=parent.name)
+        resumed = self.flow(resume=parent['name'])
         self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
         self.assertEqual(self.state()['id'], run_id)
         self.assertEqual(self.state()['status'], 'PARTIAL')
@@ -1108,10 +1118,12 @@ if sys.argv[1] == 'route':
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.state()['status'], 'ACHIEVED')
         self.assertEqual(git(self.wt, 'rev-list', '--count', self.base + '..HEAD'), '2')
-        flows = list((self.wt / '.atelier/flows').glob('*_goal_loop'))
-        self.assertEqual(len(flows), 1)
-        self.assertEqual(json.loads((flows[0] / 'progress.json').read_text())['status'], 'completed')
-        self.assertEqual(len(list((flows[0] / 'flows').glob('*_goal_iteration'))), 7)
+        flow = self.observed_flow()
+        self.assertEqual(flow['status'], 'completed')
+        self.assertEqual(flow['goal'], 'First useful workflow')
+        self.assertEqual(flow['outcome']['id'], self.state()['id'])
+        self.assertEqual(len(flow['ticks']), 7)
+        self.assertEqual(flow['warnings'], [])
         self.assertEqual((self.agent_state / 'claude.calls').read_text(), '2')
         self.assertIn('concrete findings', (self.agent_state / 'claude.prompt.2').read_text())
         # One Codex conversation planned, reviewed and demonstrated the whole run; the repair
@@ -1187,8 +1199,8 @@ if sys.argv[1] == 'route':
         # The first turn and its transport retry both failed. Repair the fixture, then resume the parent.
         ready = {'status':'READY','summary':'Resumed draft','checks':[CHECK],'evidence':['b.txt']}
         self.script('claude', [('git add b.txt\ngit commit -qm resumed', ready)])
-        flow = next((self.wt / '.atelier/flows').glob('*_goal_loop'))
-        resumed = self.flow(resume=flow.name)
+        flow = self.observed_flow()
+        resumed = self.flow(resume=flow['name'])
         self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
         self.assertEqual(self.state()['id'], original['id'])
         self.assertEqual(self.state()['deadline'], original['deadline'])
